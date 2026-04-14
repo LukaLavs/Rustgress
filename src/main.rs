@@ -4,8 +4,12 @@ use rustgress::access::tuple::header::{
     ItemIdData,
 };
 
-use rustgress::catalog::schema::{Schema, Column, DataType, Value};
+use rustgress::catalog::schema::{Schema, Column};
+use rustgress::catalog::types::{DataType, Value};
 use rustgress::storage::disk::manager::Table;
+use rustgress::catalog::catalogs::bootstrap_system_catalogs;
+use rustgress::catalog::rg_class::RGClass;
+use rustgress::catalog::rg_attribute::RGAttribute;
 // use std::time::{SystemTime, UNIX_EPOCH};
 
 
@@ -193,5 +197,56 @@ fn main() {
     assert_eq!(schema.unpack(&page.get_tuple_view(last_slot).unwrap()), row_bools);
     println!("Test 11 Passed: Boolean alignment and value check successful");
 
+    println!("---- Test 12: Catalogs ---");
+    let _ = std::fs::remove_dir_all("data");
+    bootstrap_system_catalogs();
+    test_catalogs();
+
     println!("All storage tests passed successfully.");
+}
+
+
+fn test_catalogs() {
+    println!("\n--- TEST: System Catalogs Integrity ---");
+
+    // 1. Verify rg_class
+    let mut class_table = Table::open("data/rg_class.db");
+    let class_schema = RGClass::get_schema();
+
+    println!("Checking rg_class.db...");
+    let page_class = class_table.read_page(0);
+    
+    // Slot 1: rg_class definition itself
+    if let Some(view) = page_class.get_tuple_view(1) {
+        let unpacked = class_schema.unpack(&view);
+        println!("Catalog entry 1: {:?}", unpacked[1]); 
+        assert_eq!(unpacked[1], Value::Varchar("rg_class".to_string()));
+    }
+
+    // Slot 2: rg_attributes definition
+    if let Some(view) = page_class.get_tuple_view(2) {
+        let unpacked = class_schema.unpack(&view);
+        println!("Catalog entry 2: {:?}", unpacked[1]);
+        assert_eq!(unpacked[1], Value::Varchar("rg_attributes".to_string()));
+    }
+
+    // 2. Verify rg_attributes
+    let mut attr_table = Table::open("data/rg_attributes.db");
+    let attr_schema = RGAttribute::get_schema();
+
+    println!("\nChecking rg_attributes.db...");
+    let page_attr = attr_table.read_page(0);
+    
+    // We expect at least 10 entries (5 for rg_class, 5 for rg_attributes)
+    for i in 1..=10 {
+        if let Some(view) = page_attr.get_tuple_view(i) {
+            let unpacked = attr_schema.unpack(&view);
+            // Uporabimo {:?} za vse, ker Value implementira Debug
+    println!("Slot {:<2} | Column: {:<15?} | Table OID: {:?}", i, unpacked[1], unpacked[0]);
+        } else {
+            println!("Slot {} is empty or missing!", i);
+        }
+    }
+
+    println!("--- System Catalog Test Passed ---");
 }

@@ -5,14 +5,8 @@ use crate::access::tuple::header::{
 use crate::access::tuple::header::{
     HeapTupleView, TupleInfoMask,
 };
+use super::types::{DataType, Value};
 
-#[derive(Debug, Clone, PartialEq)] 
-pub enum DataType { 
-    Integer, 
-    Varchar(u16),
-    Boolean,
-    Timestamp
-}
 #[derive(Debug, Clone)] 
 pub struct Column { 
     pub name: String, 
@@ -22,16 +16,6 @@ pub struct Column {
 pub struct Schema { 
     pub columns: Vec<Column> 
 }
-
-#[derive(Debug, Clone, PartialEq)] 
-pub enum Value { 
-    Integer(i32), 
-    Varchar(String),
-    Boolean(bool),
-    Timestamp(i64),
-    Null
-}
-
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self { Schema { columns } }
@@ -57,6 +41,18 @@ impl Schema {
                     (Value::Boolean(b), DataType::Boolean) => buffer.push(if *b { 1 } else { 0 }),
                     (Value::Timestamp(t), DataType::Timestamp) => buffer.extend_from_slice(&t.to_le_bytes()),
                     (Value::Varchar(s), DataType::Varchar(_)) => {
+                        buffer.extend_from_slice(&(s.len() as u16).to_le_bytes());
+                        buffer.extend_from_slice(s.as_bytes());
+                    }
+                    (Value::Float(f), DataType::Float) => {
+                        buffer.extend_from_slice(&f.to_le_bytes());
+                    }
+                    (Value::Double(d), DataType::Double) => {
+                        // Hardcore performance: Double bi moral biti poravnan na 8 bajtov
+                        // Za zdaj ga dodamo direktno, a v prihodnje lahko tukaj dodava padding
+                        buffer.extend_from_slice(&d.to_le_bytes());
+                    }
+                    (Value::Numeric(s), DataType::Numeric(_, _)) => {
                         buffer.extend_from_slice(&(s.len() as u16).to_le_bytes());
                         buffer.extend_from_slice(s.as_bytes());
                     }
@@ -146,6 +142,30 @@ impl Schema {
                     }
                     let s = std::str::from_utf8(&raw_data[cursor..cursor+len]).unwrap();
                     values.push(Value::Varchar(s.to_string()));
+                    cursor += len;
+                }
+                DataType::Float => {
+                    let val = f32::from_le_bytes(raw_data[cursor..cursor+4].try_into().unwrap());
+                    values.push(Value::Float(val));
+                    cursor += 4;
+                }
+                DataType::Double => {
+                    let val = f64::from_le_bytes(raw_data[cursor..cursor+8].try_into().unwrap());
+                    values.push(Value::Double(val));
+                    cursor += 8;
+                }
+                DataType::Numeric(_, _) => {
+                    // same as Varlena
+                    if cursor + 2 > raw_data.len() { panic!("Cursor out of bounds for Numeric len"); }
+                    let len = u16::from_le_bytes(raw_data[cursor..cursor+2].try_into().unwrap()) as usize;
+                    cursor += 2;
+                    
+                    if cursor + len > raw_data.len() {
+                        panic!("NUMERIC VARLENA ERROR: Tuple data too short!");
+                    }
+                    
+                    let s = std::str::from_utf8(&raw_data[cursor..cursor+len]).expect("Invalid Numeric UTF-8");
+                    values.push(Value::Numeric(s.to_string()));
                     cursor += len;
                 }
             }
