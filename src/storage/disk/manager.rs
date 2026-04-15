@@ -3,20 +3,20 @@ use crate::common::types::{
 };
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom};
-use std::path::Path;
 use crate::storage::page::layout::Page;
 use crate::storage::page::header::PageHeaderData;
 use crate::access::tuple::header::{Tuple, ItemIdData, item_id_flags};
 use std::ptr;
 
-pub struct Table { file: File }
+pub struct Table { pub oid: u32, file: File }
 
 impl Table {
     // Tables have special_size set to zero, 
     // TODO: we can use special space for FSM or VM in the future
-    pub fn open<P: AsRef<Path>>(path: P) -> Self {
-        let file = OpenOptions::new().read(true).write(true).create(true).open(path).expect("File error");
-        Table { file }
+    pub fn open(oid: u32) -> Self {
+        let path = format!("data/{}", oid);
+        let file = OpenOptions::new().read(true).write(true).create(true).open(&path).expect(&format!("Failed to open table file: {}", path));
+        Self { oid, file }
     }
     pub fn read_page(&mut self, page_id: u32) -> Page {
         let mut page = Page::empty();
@@ -24,9 +24,21 @@ impl Table {
         let _ = self.file.read_exact(&mut page.data);
         page
     }
+    pub fn read_page_raw(&mut self, page_idx: u32) -> [u8; BLCKSZ] {
+        let mut buf = [0u8; BLCKSZ];
+        let offset = (page_idx as u64) * (BLCKSZ as u64);
+        self.file.seek(std::io::SeekFrom::Start(offset)).expect("Seek failed");
+        self.file.read_exact(&mut buf).expect("Read page failed");
+        buf
+    }
     pub fn write_page(&mut self, page_id: u32, page: &Page) {
         self.file.seek(SeekFrom::Start(page_id as u64 * BLCKSZ as u64)).unwrap();
         self.file.write_all(&page.data).unwrap();
+    }
+    pub fn write_page_raw(&mut self, page_idx: u32, data: &[u8]) {
+        self.file.seek(SeekFrom::Start((page_idx as u64) * (BLCKSZ as u64))).unwrap();
+        self.file.write_all(data).unwrap();
+        self.file.flush().unwrap();
     }
     pub fn num_pages(&self) -> u32 {
         self.file.metadata().unwrap().len() as u32 / BLCKSZ as u32

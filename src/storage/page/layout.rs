@@ -42,6 +42,38 @@ impl Page {
         (h.pd_upper.saturating_sub(h.pd_lower)) as usize
     }
 
+    pub fn from_bytes(bytes: &[u8]) -> &Self {
+        unsafe { &*(bytes.as_ptr() as *const Page) }
+    } 
+    pub fn get_tuple_bytes(&self, slot_num: OffsetNumber) -> Option<&[u8]> {
+        if slot_num == 0 {
+            return None;
+        }
+        let header_size = std::mem::size_of::<PageHeaderData>() as u16;
+        let item_id_size = std::mem::size_of::<ItemIdData>() as u16;
+        let offset_to_id = header_size + (slot_num - 1) * item_id_size;
+
+        // Preveri, če smo še znotraj pd_lower (kje so shranjeni ItemId-ji)
+        if offset_to_id + item_id_size > self.get_header().pd_lower {
+            return None;
+        }
+        let item_id = unsafe {
+            let ptr = self.data.as_ptr().add(offset_to_id as usize) as *const ItemIdData;
+            std::ptr::read_unaligned(ptr)
+        };
+        if item_id.lp_flags() != item_id_flags::LP_NORMAL {
+            return None;
+        }
+        let start = item_id.lp_off() as usize;
+        let len = item_id.lp_len() as usize;
+        let end = start + len;
+
+        if end > BLCKSZ as usize {
+            return None;
+        }
+        Some(&self.data[start..end])
+    }
+
     /// Attempts to add a tuple to the page. Returns the offset (slot) number of the new tuple
     /// if successful, or None if there is not enough free space.
     pub fn add_tuple(&mut self, tuple: &Tuple) -> Option<OffsetNumber> {

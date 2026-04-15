@@ -10,7 +10,12 @@ use rustgress::storage::disk::manager::Table;
 use rustgress::catalog::catalogs::bootstrap_system_catalogs;
 use rustgress::catalog::rg_class::RGClass;
 use rustgress::catalog::rg_attribute::RGAttribute;
+use rustgress::catalog::traits::RGSomething;
 // use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use rustgress::storage::buffer::manager::BufferPoolManager;
+use rustgress::access::heap::scan::HeapScan;
+
 
 
 fn main() {
@@ -22,8 +27,8 @@ fn main() {
     ]);
 
     // Cleanup and open
-    let _ = std::fs::remove_file("data.db");
-    let mut table = Table::open("data.db");
+    let _ = std::fs::remove_file("data/1234");
+    let mut table = Table::open(1234);
 
     println!("--- Test 1: Basic Insertion and Retrieval ---");
     let row1 = vec![
@@ -202,6 +207,68 @@ fn main() {
     bootstrap_system_catalogs();
     test_catalogs();
 
+    println!("\n--- Test 13: BufferPoolManager & HeapScan (The Real Deal) ---");
+    let bpm = Arc::new(BufferPoolManager::new(10)); // 10 slotov v bufferju
+    
+    let test_oid = 5000;
+    let mut test_table = Table::open(test_oid);
+    let test_schema = Schema::new(vec![
+        Column { name: "val".to_string(), data_type: DataType::Integer },
+    ]);
+
+    for i in 1..=200 {
+        test_table.insert_tuple(&test_schema.pack(vec![Value::Integer(i)]));
+    }
+
+    let scan = HeapScan::new(bpm.clone(), &mut test_table);
+    let mut sum = 0;
+    let mut count = 0;
+
+    for tuple in scan {
+        let val = i32::from_le_bytes(tuple.data[0..4].try_into().unwrap());
+        sum += val;
+        count += 1;
+        
+    }
+
+    println!("Scan zaključen. Prešteto {} vrstic, vsota id-jev: {}", count, sum);
+    assert_eq!(count, 200);
+    assert_eq!(sum, (1..=200).sum());
+    println!("Test 13 Passed: HeapScan preko BPM deluje!");
+
+    println!("\n--- Test 14: Buffer Eviction Stress Test ---");
+    let tiny_bpm = Arc::new(BufferPoolManager::new(2));
+    let scan_tiny = HeapScan::new(tiny_bpm.clone(), &mut test_table);
+    
+    let count_tiny = scan_tiny.count();
+    assert_eq!(count_tiny, 200);
+    println!("Test 14 Passed: Scan uspešen kljub majhnemu bufferju (Eviction deluje).");
+
+    println!("\n--- Test 15: Cross-Table Buffer Integrity ---");
+    let mut other_table = Table::open(6000);
+    other_table.insert_tuple(&test_schema.pack(vec![Value::Integer(999)]));
+    {
+        let mut scan_a = HeapScan::new(bpm.clone(), &mut test_table);
+        let mut scan_b = HeapScan::new(bpm.clone(), &mut other_table);
+
+        let tuple_a = scan_a.next().unwrap();
+        let tuple_b = scan_b.next().unwrap();
+
+        let val_a_raw = i32::from_le_bytes(tuple_a.data[0..4].try_into().unwrap());
+        let val_b_raw = i32::from_le_bytes(tuple_b.data[0..4].try_into().unwrap());
+
+        println!("Tabela A (5000) prvi element: {:?}", val_a_raw);
+        println!("Tabela B (6000) prvi element: {:?}", val_b_raw);
+
+        assert_eq!(val_a_raw, 1);
+        assert_eq!(val_b_raw, 999);
+    }
+    println!("Test 15 Passed: Buffer distinguishes OIDs.");
+
+    println!("Test 16:");
+    run_complex_scan_test();
+    println!("test 16 passed.");
+
     println!("All storage tests passed successfully.");
 }
 
@@ -210,7 +277,7 @@ fn test_catalogs() {
     println!("\n--- TEST: System Catalogs Integrity ---");
 
     // 1. Verify rg_class
-    let mut class_table = Table::open("data/rg_class.db");
+    let mut class_table = Table::open(RGClass::get_oid());
     let class_schema = RGClass::get_schema();
 
     println!("Checking rg_class.db...");
@@ -231,7 +298,7 @@ fn test_catalogs() {
     }
 
     // 2. Verify rg_attributes
-    let mut attr_table = Table::open("data/rg_attributes.db");
+    let mut attr_table = Table::open(RGAttribute::get_oid());
     let attr_schema = RGAttribute::get_schema();
 
     println!("\nChecking rg_attributes.db...");
@@ -249,4 +316,71 @@ fn test_catalogs() {
     }
 
     println!("--- System Catalog Test Passed ---");
+}
+
+
+
+
+pub fn run_complex_scan_test() {
+    println!("==================================================");
+    println!("ZAČETEK TESTA: Scenarij z dvema tabelama in BPM");
+    println!("==================================================");
+
+    // 1. Priprava Buffer Poola (majhen, da vidimo, če se kaj dogaja)
+    let bpm = Arc::new(BufferPoolManager::new(5));
+    println!("[BPM] Inicializiran s 5 okvirji.");
+
+    // 2. Definiranje sheme
+    let schema = Schema::new(vec![
+        Column { name: "id".to_string(), data_type: DataType::Integer },
+        Column { name: "ime".to_string(), data_type: DataType::Varchar(50) },
+    ]);
+
+    // 3. Ustvarjanje prve tabele (OID 101) - UPORABNIKI
+    let oid_users = 101;
+    let _ = std::fs::remove_file(format!("data/{}", oid_users));
+    let mut table_users = Table::open(oid_users);
+    
+    println!("\n[Sistem] Vstavljam 5 vrstic v tabelo UPORABNIKI (OID 101)...");
+    for i in 1..=5 {
+        let row = vec![Value::Integer(i), Value::Varchar(format!("Uporabnik-{}", i))];
+        table_users.insert_tuple(&schema.pack(row));
+    }
+
+    // 4. Ustvarjanje druge tabele (OID 202) - IZDELKI
+    let oid_products = 202;
+    let _ = std::fs::remove_file(format!("data/{}", oid_products));
+    let mut table_products = Table::open(oid_products);
+
+    println!("[Sistem] Vstavljam 5 vrstic v tabelo IZDELKI (OID 202)...");
+    for i in 1..=5 {
+        let row = vec![Value::Integer(i + 100), Value::Varchar(format!("Izdelek-{}", i))];
+        table_products.insert_tuple(&schema.pack(row));
+    }
+
+    // 5. Branje prve tabele s HeapScanom
+    println!("\n--- SKENIRANJE TABELE UPORABNIKI ---");
+    let scan_users = HeapScan::new(bpm.clone(), &mut table_users);
+    for (idx, tuple) in scan_users.enumerate() {
+        let data = schema.unpack_from_tuple(&tuple); // Predpostavljam, da si dodal to metodo
+        println!("  Row {}: {:?}", idx + 1, data);
+    }
+
+    // 6. Branje druge tabele s HeapScanom
+    println!("\n--- SKENIRANJE TABELE IZDELKI ---");
+    let scan_products = HeapScan::new(bpm.clone(), &mut table_products);
+    for (idx, tuple) in scan_products.enumerate() {
+        let data = schema.unpack_from_tuple(&tuple);
+        println!("  Row {}: {:?}", idx + 1, data);
+    }
+
+    // 7. Preverjanje stanja Bufferja
+    // Ker smo prebrali obe tabeli, bi morali biti v page_table oznake za obe tabeli
+    println!("\n[BPM] Trenutno stanje v Buffer Poolu:");
+    // Tukaj bi lahko dodal debug izpis v BPM, če ga imaš, npr:
+    // bpm.print_debug_status();
+
+    println!("==================================================");
+    println!("TEST USPEŠNO ZAKLJUČEN");
+    println!("==================================================");
 }

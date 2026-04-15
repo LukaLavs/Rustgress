@@ -2,6 +2,7 @@ use crate::storage::disk::manager::Table;
 use super::types::{DataType};
 use super::rg_attribute::RGAttribute;
 use super::rg_class::RGClass;
+use super::traits::RGSomething;
 
 
 
@@ -15,7 +16,7 @@ pub fn bootstrap_system_catalogs() {
 
     // CREATE rg_class TABLE
     let rg_class_schema = RGClass::get_schema();
-    let mut rg_class_table = Table::open("data/rg_class.db");
+    let mut rg_class_table = Table::open(RGClass::get_oid());
 
     let to_insert = [
         RGClass::new(1, "rg_class".to_string(), 1,
@@ -30,7 +31,7 @@ pub fn bootstrap_system_catalogs() {
 
     // CREATE rg_attributes TABLE
     let rg_attribute_schema = RGAttribute::get_schema();
-    let mut rg_attribute_table = Table::open("data/rg_attributes.db");
+    let mut rg_attribute_table = Table::open(RGAttribute::get_oid());
     let to_insert = [
         // rg_class table
         RGAttribute::new(DataType::Integer, 1, 

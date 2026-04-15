@@ -173,3 +173,63 @@ impl Schema {
         values
     }
 }
+
+impl Schema {
+    pub fn unpack_from_tuple(&self, tuple: &Tuple) -> Vec<Value> {
+        let mut values = Vec::new();
+        let mut cursor = 0;
+
+        for (i, col) in self.columns.iter().enumerate() {
+            let is_null = if !tuple.null_bitmap.is_empty() {
+                (tuple.null_bitmap[i / 8] & (1 << (i % 8))) == 0
+            } else {
+                false
+            };
+
+            if is_null {
+                values.push(Value::Null);
+                continue;
+            }
+            
+            match col.data_type {
+                DataType::Integer => {
+                    let val = i32::from_le_bytes(tuple.data[cursor..cursor+4].try_into().unwrap());
+                    values.push(Value::Integer(val));
+                    cursor += 4;
+                }
+                DataType::Boolean => {
+                    values.push(Value::Boolean(tuple.data[cursor] == 1));
+                    cursor += 1;
+                }
+                DataType::Timestamp => {
+                    let val = i64::from_le_bytes(tuple.data[cursor..cursor+8].try_into().unwrap());
+                    values.push(Value::Timestamp(val));
+                    cursor += 8;
+                }
+                DataType::Varchar(_) | DataType::Numeric(_, _) => {
+                    let len = u16::from_le_bytes(tuple.data[cursor..cursor+2].try_into().unwrap()) as usize;
+                    cursor += 2;
+                    let s = std::str::from_utf8(&tuple.data[cursor..cursor+len]).unwrap();
+                    
+                    if let DataType::Varchar(_) = col.data_type {
+                        values.push(Value::Varchar(s.to_string()));
+                    } else {
+                        values.push(Value::Numeric(s.to_string()));
+                    }
+                    cursor += len;
+                }
+                DataType::Float => {
+                    let val = f32::from_le_bytes(tuple.data[cursor..cursor+4].try_into().unwrap());
+                    values.push(Value::Float(val));
+                    cursor += 4;
+                }
+                DataType::Double => {
+                    let val = f64::from_le_bytes(tuple.data[cursor..cursor+8].try_into().unwrap());
+                    values.push(Value::Double(val));
+                    cursor += 8;
+                }
+            }
+        }
+        values
+    }
+}

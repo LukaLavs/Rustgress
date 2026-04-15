@@ -3,6 +3,7 @@ use crate::common::types::{
     CheckSum, LocationIndex, PageSizeVersion, TransactionId,
     BLCKSZ, PAGE_SIZE_VERSION,
 };
+use crate::access::tuple::header::ItemIdData;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 
@@ -47,5 +48,16 @@ impl PageHeaderData {
             pd_prune_xid: 0, // prunning not implemented yet
         }
     }
+
+    /// calculates how many ItemIdData structures are between header and pd_lower.
+    pub fn num_slots(&self) -> u16 {
+        let header_size = std::mem::size_of::<PageHeaderData>() as u16;
+        let item_id_size = std::mem::size_of::<ItemIdData>() as u16;
+        if self.pd_lower < header_size {
+            return 0;
+        }
+        (self.pd_lower - header_size) / item_id_size
+    }
 }
+
 

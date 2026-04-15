@@ -107,10 +107,13 @@ impl Tuple {
         let hoff = self.header.t_hoff as usize;
         target_buffer[0..header_bytes.len()].copy_from_slice(header_bytes);
         if !self.null_bitmap.is_empty() {
-            target_buffer[header_bytes.len()..header_bytes.len() + self.null_bitmap.len()]
-                .copy_from_slice(&self.null_bitmap);
+            let bitmap_start = header_bytes.len();
+            let bitmap_end = bitmap_start + self.null_bitmap.len();
+            target_buffer[bitmap_start..bitmap_end].copy_from_slice(&self.null_bitmap);
         }
-        target_buffer[hoff..hoff + self.data.len()].copy_from_slice(&self.data);
+        let data_start = hoff;
+        let data_end = data_start + self.data.len();
+        target_buffer[data_start..data_end].copy_from_slice(&self.data);
     }
 }
 

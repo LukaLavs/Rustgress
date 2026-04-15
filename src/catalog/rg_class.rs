@@ -1,6 +1,7 @@
 use super::schema::{Schema, Column};
 use super::types::{DataType, Value};
 use crate::access::tuple::header::Tuple;
+use super::traits::RGSomething;
 
 pub struct RGClass {
     pub oid: u32,             // unique table identifier
@@ -11,8 +12,8 @@ pub struct RGClass {
     // ... perhaps more metadata should be added later
 }
 
-impl RGClass {
-    pub fn get_schema() -> Schema {
+impl RGSomething for RGClass {
+    fn get_schema() -> Schema {
         let schema = Schema::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
             Column { name: "relname".to_string(), data_type: DataType::Varchar(64) },
@@ -22,7 +23,7 @@ impl RGClass {
         ]);
         schema
     }
-    pub fn make_tuple(&self, schema: &Schema) -> Tuple {
+    fn make_tuple(&self, schema: &Schema) -> Tuple {
         schema.pack(vec![
             Value::Integer(self.oid as i32),
             Value::Varchar(self.relname.clone()),
@@ -31,6 +32,7 @@ impl RGClass {
             Value::Float(self.reltuples),
         ])
     }
+    fn get_oid() -> u32 { 1 }
 }
 
 impl RGClass {
