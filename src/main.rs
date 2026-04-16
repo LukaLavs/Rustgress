@@ -15,10 +15,12 @@ use rustgress::catalog::traits::RGSomething;
 use std::sync::Arc;
 use rustgress::storage::buffer::manager::BufferPoolManager;
 use rustgress::access::heap::scan::HeapScan;
+use rustgress::access::transaction::manager::TransactionManager;
 
 
 
 fn main() {
+    let tm = Arc::new(TransactionManager::new(100));
     let schema = Schema::new(vec![
         Column { name: "id".to_string(), data_type: DataType::Integer },
         Column { name: "is_active".to_string(), data_type: DataType::Boolean },
@@ -208,51 +210,80 @@ fn main() {
     test_catalogs();
 
     println!("\n--- Test 13: BufferPoolManager & HeapScan (The Real Deal) ---");
-    let bpm = Arc::new(BufferPoolManager::new(10)); // 10 slotov v bufferju
-    
+    let bpm = Arc::new(BufferPoolManager::new(10));
+    let tm = Arc::new(TransactionManager::new(100)); // XID se začne pri 100
+
     let test_oid = 5000;
     let mut test_table = Table::open(test_oid);
     let test_schema = Schema::new(vec![
         Column { name: "val".to_string(), data_type: DataType::Integer },
     ]);
 
+    // 1. ZAČNI TRANSAKCIJO
+    let xid = tm.begin();
+
+    // 2. VSTAVI PODATKE (Poskrbi, da insert_tuple uporabi ta xid!)
     for i in 1..=200 {
-        test_table.insert_tuple(&test_schema.pack(vec![Value::Integer(i)]));
+        let mut tuple = test_schema.pack(vec![Value::Integer(i)]);
+        tuple.header.t_xmin = xid as u32; // <--- NUJNO: Vrstica mora imeti pravi XID
+        test_table.insert_tuple(&tuple);
     }
 
-    let scan = HeapScan::new(bpm.clone(), &mut test_table);
+    // 3. POTRDI TRANSAKCIJO
+    tm.commit(xid);
+    tm.flush(); // Zapiši v CLOG na disk
+
+    // 4. USTVARI SCAN (Zdaj, ko je XID commited in ni več v active_xids)
+    let scan = HeapScan::new(bpm.clone(), &mut test_table, tm.clone());
+
     let mut sum = 0;
     let mut count = 0;
-
     for tuple in scan {
         let val = i32::from_le_bytes(tuple.data[0..4].try_into().unwrap());
         sum += val;
         count += 1;
-        
     }
 
-    println!("Scan zaključen. Prešteto {} vrstic, vsota id-jev: {}", count, sum);
+    println!("Scan zaključen. Prešteto {} vrstic, vsota: {}", count, sum);
     assert_eq!(count, 200);
     assert_eq!(sum, (1..=200).sum());
     println!("Test 13 Passed: HeapScan preko BPM deluje!");
 
     println!("\n--- Test 14: Buffer Eviction Stress Test ---");
     let tiny_bpm = Arc::new(BufferPoolManager::new(2));
-    let scan_tiny = HeapScan::new(tiny_bpm.clone(), &mut test_table);
+    let scan_tiny = HeapScan::new(tiny_bpm.clone(), &mut test_table, tm.clone());
     
     let count_tiny = scan_tiny.count();
     assert_eq!(count_tiny, 200);
     println!("Test 14 Passed: Scan uspešen kljub majhnemu bufferju (Eviction deluje).");
 
-    println!("\n--- Test 15: Cross-Table Buffer Integrity ---");
+println!("\n--- Test 15: Cross-Table Buffer Integrity (MVCC Version) ---");
+    
+    // 1. Priprava nove tabele
     let mut other_table = Table::open(6000);
-    other_table.insert_tuple(&test_schema.pack(vec![Value::Integer(999)]));
-    {
-        let mut scan_a = HeapScan::new(bpm.clone(), &mut test_table);
-        let mut scan_b = HeapScan::new(bpm.clone(), &mut other_table);
+    
+    // 2. Začnemo transakcijo za vstavljanje v drugo tabelo
+    let xid_other = tm.begin();
+    
+    // 3. Pripravimo tuple in mu ročno nastavimo t_xmin (dokler nimaš Transactional Table API-ja)
+    let mut tuple_999_raw = test_schema.pack(vec![Value::Integer(999)]);
+    tuple_999_raw.header.t_xmin = xid_other as u32; // <--- Nastavimo XID transakcije
+    
+    other_table.insert_tuple(&tuple_999_raw);
+    
+    // 4. POTRDIMO transakcijo, da postane vidna za prihodnje snapshote
+    tm.commit(xid_other);
+    tm.flush(); // Shranimo stanje v CLOG na disk
 
-        let tuple_a = scan_a.next().unwrap();
-        let tuple_b = scan_b.next().unwrap();
+    {
+        // 5. Ustvarimo scan-a. 
+        // HeapScan::new bo vzel nov Snapshot, ki bo videl Commited xid_other.
+        let mut scan_a = HeapScan::new(bpm.clone(), &mut test_table, tm.clone());
+        let mut scan_b = HeapScan::new(bpm.clone(), &mut other_table, tm.clone());
+
+        // Zdaj .next() ne bi smel več vrniti None
+        let tuple_a = scan_a.next().expect("Tabela A (5000) bi morala vrniti tuple (1)");
+        let tuple_b = scan_b.next().expect("Tabela B (6000) bi morala vrniti tuple (999)");
 
         let val_a_raw = i32::from_le_bytes(tuple_a.data[0..4].try_into().unwrap());
         let val_b_raw = i32::from_le_bytes(tuple_b.data[0..4].try_into().unwrap());
@@ -260,10 +291,11 @@ fn main() {
         println!("Tabela A (5000) prvi element: {:?}", val_a_raw);
         println!("Tabela B (6000) prvi element: {:?}", val_b_raw);
 
-        assert_eq!(val_a_raw, 1);
-        assert_eq!(val_b_raw, 999);
+        assert_eq!(val_a_raw, 1, "Vrednost v tabeli A bi morala biti 1");
+        assert_eq!(val_b_raw, 999, "Vrednost v tabeli B bi morala biti 999");
     }
-    println!("Test 15 Passed: Buffer distinguishes OIDs.");
+
+    println!("Test 15 Passed: Buffer distinguishes OIDs and respects MVCC.");
 
     println!("Test 16:");
     run_complex_scan_test();
@@ -360,7 +392,8 @@ pub fn run_complex_scan_test() {
 
     // 5. Branje prve tabele s HeapScanom
     println!("\n--- SKENIRANJE TABELE UPORABNIKI ---");
-    let scan_users = HeapScan::new(bpm.clone(), &mut table_users);
+    let tm = Arc::new(TransactionManager::new(100));
+    let scan_users = HeapScan::new(bpm.clone(), &mut table_users, tm.clone());
     for (idx, tuple) in scan_users.enumerate() {
         let data = schema.unpack_from_tuple(&tuple); // Predpostavljam, da si dodal to metodo
         println!("  Row {}: {:?}", idx + 1, data);
@@ -368,7 +401,7 @@ pub fn run_complex_scan_test() {
 
     // 6. Branje druge tabele s HeapScanom
     println!("\n--- SKENIRANJE TABELE IZDELKI ---");
-    let scan_products = HeapScan::new(bpm.clone(), &mut table_products);
+    let scan_products = HeapScan::new(bpm.clone(), &mut table_products, tm.clone());
     for (idx, tuple) in scan_products.enumerate() {
         let data = schema.unpack_from_tuple(&tuple);
         println!("  Row {}: {:?}", idx + 1, data);

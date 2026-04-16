@@ -15,6 +15,7 @@ use std::sync::Arc;
 use rustgress::storage::buffer::manager::BufferPoolManager;
 use rustgress::access::heap::scan::HeapScan;
 use rustgress::access::tuple::header::HeapTupleView;
+use rustgress::access::transaction::manager::TransactionManager;
 
 #[cfg(test)]
 mod tests {
@@ -91,8 +92,8 @@ mod tests {
         for i in 1..=100 {
             table.insert_tuple(&schema.pack(vec![Value::Integer(i)]));
         }
-
-        let scan = HeapScan::new(bpm, &mut table);
+        let tm = Arc::new(TransactionManager::new(100));
+        let scan = HeapScan::new(bpm, &mut table, tm);
         let count = scan.count();
         assert_eq!(count, 100);
     }
@@ -109,8 +110,9 @@ mod tests {
         t1.insert_tuple(&schema.pack(vec![Value::Integer(1)]));
         t2.insert_tuple(&schema.pack(vec![Value::Integer(2)]));
 
-        let mut scan1 = HeapScan::new(bpm.clone(), &mut t1);
-        let mut scan2 = HeapScan::new(bpm.clone(), &mut t2);
+        let tm = Arc::new(TransactionManager::new(100));
+        let mut scan1 = HeapScan::new(bpm.clone(), &mut t1, tm.clone());
+        let mut scan2 = HeapScan::new(bpm.clone(), &mut t2, tm.clone());
 
         let v1 = scan1.next().unwrap().data;
         let v2 = scan2.next().unwrap().data;

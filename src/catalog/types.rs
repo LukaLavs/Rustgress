@@ -58,3 +58,23 @@ pub enum Value {
     Null
 }
 
+impl Value {
+    pub fn as_str(&self) -> String {
+        match self {
+            Value::Integer(i) => i.to_string(),
+            Value::Varchar(s) => s.clone(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Timestamp(t) => t.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Double(d) => d.to_string(),
+            Value::Numeric(s) => s.clone(),
+            Value::Null => "NULL".to_string(),
+        }
+    }
+    pub fn as_u32(&self) -> Option<u32> {
+        match self {
+            Value::Integer(i) => Some(*i as u32),
+            _ => None,
+        }
+    }
+}
