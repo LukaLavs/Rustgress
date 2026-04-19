@@ -32,7 +32,7 @@ impl DataType {
             _ => panic!("Unknown OID: {}", oid),
         }
     }
-    pub fn get_byte_len(&self) -> i16 {
+    pub fn get_byte_len(&self) -> i32 {
         match self {
             DataType::Integer => 4,
             DataType::Varchar(_) => -1,
@@ -71,9 +71,9 @@ impl Value {
             Value::Null => "NULL".to_string(),
         }
     }
-    pub fn as_u32(&self) -> Option<u32> {
+    pub fn as_i32(&self) -> Option<i32> {
         match self {
-            Value::Integer(i) => Some(*i as u32),
+            Value::Integer(i) => Some(*i as i32),
             _ => None,
         }
     }

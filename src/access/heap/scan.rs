@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag, BufferFrame};
 use crate::storage::disk::manager::Table;
 use crate::storage::page::layout::Page;
@@ -7,12 +7,13 @@ use super::super::transaction::manager::{TransactionManager, Snapshot};
 use std::collections::HashMap;
 use std::cell::RefCell;
 use crate::catalog::schema::Schema;
-use crate::catalog::rg_class::RGClass;
-use crate::catalog::traits::RGSomething;
+use crate::catalog::catalogs::rg_class::RGClass;
+use crate::catalog::catalogs::traits::RGSomething;
+use crate::storage::manager::StorageManager;
 
-pub struct HeapScan<'a> {
+pub struct HeapScan {
     bpm: Arc<BufferPoolManager>, // pointer to buffer pool manager
-    table: &'a mut Table, // TODO: make it imutable reference, updates will happen via buffer pool RwLocks
+    table: Arc<RwLock<Table>>,   // Updates will happen via buffer pool RwLocks
     tm: Arc<TransactionManager>, // pointer to transaction manager for visibility checks
     snapshot: Snapshot,          // snapshot of transaction state at the start of the scan
     current_page_idx: u32,       // page currently viewed by HeapScan
@@ -21,8 +22,8 @@ pub struct HeapScan<'a> {
     visibility_cache: RefCell<HashMap<u64, bool>>, // cache of transaction visibility results to avoid repeated checks
 }
 
-impl<'a> HeapScan<'a> {
-    pub fn new(bpm: Arc<BufferPoolManager>, table: &'a mut Table, tm: Arc<TransactionManager>) -> Self {
+impl HeapScan {
+    pub fn new(bpm: Arc<BufferPoolManager>, table: Arc<RwLock<Table>>, tm: Arc<TransactionManager>) -> Self {
         let snapshot = tm.get_snapshot();
         Self {
             bpm,
@@ -50,20 +51,21 @@ impl<'a> HeapScan<'a> {
     }
 }
 
-impl<'a> Iterator for HeapScan<'a> {
+impl<'a> Iterator for HeapScan {
     type Item = Tuple;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let num_pages = self.table.num_pages();
+        let num_pages = self.table.read().unwrap().num_pages();
 
         while self.current_page_idx < num_pages {
             // load the page
             if self.active_frame.is_none() {
                 let tag = BufferTag {
-                    table_oid: self.table.oid,
+                    table_oid: self.table.read().unwrap().oid,
                     page_idx: self.current_page_idx,
                 };
-                self.active_frame = Some(self.bpm.fetch_page(tag, self.table));
+                let mut table_write = self.table.write().unwrap();
+                self.active_frame = Some(self.bpm.fetch_page(tag, &mut table_write));
             }
             let frame = self.active_frame.as_ref().unwrap();
             let data_lock = frame.data.read().unwrap();
@@ -99,7 +101,7 @@ impl<'a> Iterator for HeapScan<'a> {
     }
 }
 
-impl<'a> Drop for HeapScan<'a> {
+impl Drop for HeapScan {
     fn drop(&mut self) {
         if let Some(frame) = &self.active_frame {
             self.bpm.unpin_page(frame.id);
@@ -107,23 +109,24 @@ impl<'a> Drop for HeapScan<'a> {
     }
 }
 
-impl<'a> HeapScan<'a> {
+impl HeapScan{
     pub fn get_table_oid(
-        bpm: Arc<BufferPoolManager>, 
+        storage: Arc<StorageManager>,
         tm: Arc<TransactionManager>,
         class_schema: &Schema, 
         target_table_name: &str
-    ) -> Option<u32> {
-        let mut rg_class_table = Table::open(RGClass::get_oid());
-        let scan = HeapScan::new(bpm, &mut rg_class_table, tm);
+    ) -> Option<i32> {
+        let rg_class_table = storage.get_table(RGClass::get_oid());
+        let bpm = storage.get_bpm();
+        let scan = HeapScan::new(bpm, rg_class_table, tm);
         for tuple in scan {
             let values = class_schema.unpack_from_tuple(&tuple);
             // oid is first column, relname is second column in rg_class
             if let Some(name_value) = values.get(1) {
                 if name_value.as_str() == target_table_name {
-                    // Če se ujema, vrni OID (stolpec 0)
+                    // if matches return oid (column 0)
                     if let Some(oid_value) = values.get(0) {
-                        return oid_value.as_u32();
+                        return oid_value.as_i32();
                     }
                 }
             }

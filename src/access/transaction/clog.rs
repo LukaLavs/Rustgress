@@ -12,8 +12,8 @@ pub enum XidStatus {
 }
 
 /// Commit Log (CLOG) tracks the status of transactions in compact form.
-pub struct CLog {
-    data: Vec<u8>, // each byte stores the status of 4 transactions
+pub struct CLog { // as of now it is sotred in RAM (it does't have buffer pool management).
+    pub data: Vec<u8>, // each byte stores the status of 4 transactions
     file_path: String, // sequence of bytes, where each 2 bits represent status of one transaction
 }
 

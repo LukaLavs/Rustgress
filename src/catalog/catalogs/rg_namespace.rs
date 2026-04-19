@@ -1,0 +1,33 @@
+use super::super::schema::{Schema, Column};
+use super::super::types::{DataType, Value};
+use crate::access::tuple::header::Tuple;
+use super::traits::RGSomething;
+use crate::common::constants::{RG_NAMESPACE_OID};
+
+pub struct RGNamespace {
+    pub oid: u32,             // unique table identifier
+    pub nspname: String,      // schema name
+    pub nspowner: u32,        // owner of the schema
+    pub nspacl: u32,          // owner's permissions
+}
+
+impl RGSomething for RGNamespace {
+    fn get_schema() -> Schema {
+        let schema = Schema::new(vec![
+            Column { name: "oid".to_string(), data_type: DataType::Integer },
+            Column { name: "nspname".to_string(), data_type: DataType::Varchar(64) },
+            Column { name: "nspowner".to_string(), data_type: DataType::Integer },
+            Column { name: "nspacl".to_string(), data_type: DataType::Integer },
+        ]);
+        schema
+    }
+    fn make_tuple(self, schema: &Schema) -> Tuple {
+        schema.pack(vec![
+            Value::Integer(self.oid as i32),
+            Value::Varchar(self.nspname),
+            Value::Integer(self.nspowner as i32),
+            Value::Integer(self.nspacl as i32),
+        ])
+    }
+    fn get_oid() -> u32 { RG_NAMESPACE_OID }
+}

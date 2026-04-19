@@ -160,3 +160,48 @@ impl BufferPoolManager {
         }
     }
 }
+
+
+impl BufferPoolManager { // TODO:
+    // ... obstoječe metode ...
+
+    /// Prisilno zapiše vse "umazane" (dirty) strani iz vseh okvirjev na disk.
+    /// Uporablja lokalni cache tabel, da prepreči nenehno odpiranje datotek.
+    pub fn flush_all(&self) {
+        let page_table = self.page_table.read().unwrap();
+        let mut table_cache: HashMap<u32, Table> = HashMap::new();
+
+        println!("[BPM] Začenjam prisilni flush vseh umazanih strani...");
+
+        for (tag, &buf_id) in page_table.iter() {
+            let frame = &self.frames[buf_id];
+            
+            // 1. Preveri, če je stran sploh umazana (brez dolgotrajnega zaklepanja)
+            let mut is_dirty = frame.is_dirty.lock().unwrap();
+            if !*is_dirty {
+                continue;
+            }
+
+            // 2. Pridobi Table objekt (iz cache-a ali odpri na novo)
+            let table = table_cache
+                .entry(tag.table_oid)
+                .or_insert_with(|| Table::open(tag.table_oid));
+
+            // 3. Zapiši podatke
+            let data_lock = frame.data.read().unwrap();
+            
+            // Uporabimo write_page_raw, ki že vključuje seek in flush() na nivoju datoteke
+            table.write_page_raw(tag.page_idx, &data_lock.data);
+            
+            // 4. Ponastavi dirty zastavico
+            *is_dirty = false;
+            
+            println!(
+                "  -> Flush uspel: Tabela {}, Stran {}, Frame {}", 
+                tag.table_oid, tag.page_idx, buf_id
+            );
+        }
+        
+        println!("[BPM] Flush vseh strani zaključen.");
+    }
+}

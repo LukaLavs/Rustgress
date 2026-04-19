@@ -15,9 +15,34 @@ impl Table {
     // TODO: we can use special space for FSM or VM in the future
     pub fn open(oid: u32) -> Self {
         let path = format!("data/{}", oid);
-        let file = OpenOptions::new().read(true).write(true).create(true).open(&path).expect(&format!("Failed to open table file: {}", path));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("Table does not exist!");
+        
         Self { oid, file }
     }
+    pub fn create(oid: u32, special_size: u16) -> Self {
+        let path = format!("data/{}", oid);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true) // error if exists
+            .open(&path)
+            .expect(&format!("Table {} already exists!", oid));
+        let mut table = Self { oid, file };
+        table.extend(special_size);
+        table
+    }
+
+    pub fn extend(&mut self, special_size: u16) -> u32 {
+        let new_page_id = self.num_pages();
+        let empty_page = Page::new(special_size);
+        self.write_page(new_page_id, &empty_page);
+        new_page_id
+    }
+
     pub fn read_page(&mut self, page_id: u32) -> Page {
         let mut page = Page::empty();
         self.file.seek(SeekFrom::Start(page_id as u64 * BLCKSZ as u64)).unwrap();

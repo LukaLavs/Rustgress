@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use rustgress::storage::page::header::PageHeaderData;
 use rustgress::access::tuple::header::{
     ItemIdData,

@@ -9,3 +9,9 @@ pub type HeapTupleData = Vec<u8>;
 
 pub const PAGE_SIZE_VERSION: PageSizeVersion = (BLCKSZ as u16) << 8 | 0;
 pub const CLOG_FILE_PATH: &str = "data/clog.dat";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowId {
+    pub page_id: u32,
+    pub slot_num: u16,
+}

@@ -6,18 +6,24 @@ use crate::common::types::CLOG_FILE_PATH;
 
 pub type TransactionId = u64;
 
+/// TransactionManager is responsible for managing transaction lifecycles, tracking active transactions, 
+/// and determining visibility of transactions to ensure ACID properties.
 pub struct TransactionManager { 
     next_xid: AtomicU64,
     active_xids: RwLock<HashSet<TransactionId>>, // list of active transaction IDs
-    clog: RwLock<CLog>, // commit log to track transaction statuses
+    pub clog: RwLock<CLog>, // commit log to track transaction statuses
 }
 
 impl TransactionManager {
-    pub fn new(start_xid: TransactionId) -> Self {
+    pub fn new() -> Self {
+        let clog = CLog::open(CLOG_FILE_PATH);
+        let next_xid = clog.find_last_xid() + 1;
+
+        println!("[DEBUG] CLOG last_xid found: {}", next_xid - 1);
         Self {
-            next_xid: AtomicU64::new(start_xid),
+            next_xid: AtomicU64::new(next_xid),
             active_xids: RwLock::new(HashSet::new()),
-            clog: RwLock::new(CLog::open(CLOG_FILE_PATH)),
+            clog: RwLock::new(clog),
         }
     }
 
@@ -34,7 +40,7 @@ impl TransactionManager {
         {
             let mut clog = self.clog.write().unwrap();
             clog.set_status(xid, XidStatus::Committed);
-            // clog.flush(); // TODO: decide when to flush CLOG to disk for durability
+            clog.flush(); // TODO: decide when to flush CLOG to disk for durability
         }
         let mut active = self.active_xids.write().unwrap();
         active.remove(&xid);
@@ -78,6 +84,33 @@ impl TransactionManager {
     }
 }
 
+impl CLog {
+    pub fn find_last_xid(&self) -> u64 {
+        // 1. Skeniramo bajte od zadaj naprej, da najdemo zadnji bajt, ki ni popolnoma prazen
+        let last_non_zero_byte = self.data.iter().enumerate().rev().find(|&(_, byte)| *byte != 0);
+
+        if let Some((byte_idx, &byte)) = last_non_zero_byte {
+            // 2. V tem bajtu so 4 transakcije. Preverimo vsako (2 bita) od desne proti levi.
+            // i=3 je zadnja transakcija v bajtu, i=0 je prva.
+            for i in (0..4).rev() {
+                let bit_shift = i * 2;
+                let status = (byte >> bit_shift) & 0b11; // maska 0b11 izbere 2 bita
+
+                // 3. Če status ni InProgress (00), smo našli zadnjo aktivnost
+                if status != 0 {
+                    let last_xid = (byte_idx as u64 * 4) + i as u64;
+                    return last_xid;
+                }
+            }
+            // Če so vsi biti v bajtu čudežno 0 (se ne bi smelo zgoditi zaradi .find()),
+            // vrnemo začetek tega bajta.
+            return byte_idx as u64 * 4;
+        }
+
+        // 4. Če je cel CLOG prazen (samo ničle), vrnemo 0
+        0
+    }
+}
 pub struct Snapshot {
     max_xid: TransactionId, // first XID that will be assigned to a new transaction
     active_at_start: HashSet<TransactionId>, // transactions active at the start of the snapshot
