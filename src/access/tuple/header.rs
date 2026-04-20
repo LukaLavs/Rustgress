@@ -1,4 +1,4 @@
-use crate::common::types::{TransactionId, HeapTupleData};
+use crate::common::types::{TransactionId, HeapTupleData, RowId};
 use zerocopy_derive::{IntoBytes, FromBytes, Immutable, KnownLayout};
 use zerocopy::{IntoBytes, FromBytes};
 use bitflags::bitflags;
@@ -90,6 +90,12 @@ impl HeapTupleHeaderData {
     /// Check if this tuple version is the latest (i.e., not updated by another transaction)
     pub fn is_latest(&self, self_page: u32, self_slot: u16) -> bool {
         self.t_ctid_page == self_page && self.t_ctid_slot == self_slot
+    }
+    pub fn get_rid(&self) -> RowId {
+        RowId {
+            page_id: self.t_ctid_page,
+            slot_num: self.t_ctid_slot,
+        }
     }
 }
 

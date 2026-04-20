@@ -78,10 +78,15 @@ impl<'a> Iterator for HeapScan {
                 self.current_slot_idx += 1;
                 if let Some(raw_tuple_bytes) = page.get_tuple_bytes(slot) {
                     let view = HeapTupleView::new(raw_tuple_bytes);
-                    let is_visible = self.is_xid_visible(view.header.t_xmin as u64);
+                    let t_xmax = view.header.t_xmax;
+                    let is_deleted_and_visible = t_xmax != 0 && self.is_xid_visible(t_xmax as u64);
+                    let is_visible = !is_deleted_and_visible && self.is_xid_visible(view.header.t_xmin as u64);
                     if is_visible {
+                        let mut header = view.header;
+                        header.t_ctid_page = self.current_page_idx;
+                        header.t_ctid_slot = slot;
                         return Some(Tuple {
-                            header: view.header,
+                            header: header,
                             null_bitmap: view.null_bitmap().map(|b| b.to_vec()).unwrap_or_default(),
                             data: view.data().to_vec(),
                         });

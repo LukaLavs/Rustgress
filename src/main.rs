@@ -9,11 +9,9 @@ use rustgress::catalog::types::{DataType, Value};
 use rustgress::access::heap::heap_access::HeapAccess;
 use rustgress::access::heap::scan::HeapScan;
 
-use rustgress::catalog::catalogs::rg_class::RGClass;
-use rustgress::catalog::catalogs::traits::RGSomething;
 
 fn main() {
-    // Setup shared system components
+    // 1. Setup shared system components
     let bpm = Arc::new(BufferPoolManager::new(50));
     let sm = Arc::new(StorageManager::new(bpm.clone()));
     let tm = Arc::new(TransactionManager::new());
@@ -21,14 +19,13 @@ fn main() {
     
     cm.bootstrap_system_catalogs();
 
-
-    // Define a schema
+    // 2. Define a schema
     let schema = Arc::new(Schema::new(vec![
         Column { name: "user_id".to_string(), data_type: DataType::Integer },
         Column { name: "msg".to_string(), data_type: DataType::Varchar(100) },
     ]));
 
-    // 4. Thread 1: Create the table
+    // 3. Create the table
     let table_name = "messages";
     let xid_setup = tm.begin();
     let msg_table_oid = cm.create_table(xid_setup, table_name, 0, &schema);
@@ -36,9 +33,8 @@ fn main() {
    
     println!("[Main] Table '{}' created with OID: {}", table_name, msg_table_oid);
 
-    // 5. Simulate 3 concurrent users
+    // 4. Simulate 3 concurrent users
     let mut handles = vec![];
-
     for user_id in 1..=3 {
         let sm_c = sm.clone();
         let tm_c = tm.clone();
@@ -46,28 +42,23 @@ fn main() {
         
         let handle = thread::spawn(move || {
             let xid = tm_c.begin();
-            println!("[User {}] Started transaction {}", user_id, xid);
             for i in 1..=10 {
                 let mut tuple = schema_c.pack(vec![
                     Value::Integer(user_id as i32),
                     Value::Varchar(format!("Hello from user {}, msg #{}", user_id, i)),
                 ]);
-                // Perform the insert via HeapAccess
                 HeapAccess::insert(sm_c.clone(), xid, msg_table_oid, &mut tuple);
             }
-
             tm_c.commit(xid);
-            println!("[User {}] Committed transaction {}", user_id, xid);
         });
         handles.push(handle);
     }
 
-    // Wait for all users to finish
     for handle in handles {
         handle.join().unwrap();
     }
 
-    // 6. Verification: Scan the table to see if all 30 messages are there
+    // 5. Verification: Scan data
     println!("\n--- Final Scan (Reading all committed data) ---");
     let table_handle = sm.get_table(msg_table_oid);
     let scan = HeapScan::new(bpm.clone(), table_handle, tm.clone());
@@ -75,18 +66,35 @@ fn main() {
     let mut count = 0;
     for tuple in scan {
         let data = schema.unpack_from_tuple(&tuple);
-        println!("Found: {:?}", data);
         count += 1;
     }
+    println!("Actual rows: {}", count);
 
+    // ==========================================================
+    // 6. NOVO: TESTIRANJE GET_SCHEMA (Dynamic Catalog Lookup)
+    // ==========================================================
+    println!("\n--- Catalog Verification ---");
+    
+    // Poskusimo dobiti shemo nazaj iz sistemskih katalogov samo z uporabo OID-ja
+    let dynamic_schema = cm.get_schema(msg_table_oid);
+    
+    println!("Retrieved Schema for OID {}:", msg_table_oid);
+    for (i, col) in dynamic_schema.columns.iter().enumerate() {
+        println!("  Col #{}: {} ({:?})", i + 1, col.name, col.data_type);
+    }
+
+    // Preverimo, če se ujemata (imena in tipi)
+    assert_eq!(dynamic_schema.columns.len(), 2);
+    assert_eq!(dynamic_schema.columns[0].name, "user_id");
+    assert_eq!(dynamic_schema.columns[1].name, "msg");
+    
     println!("\n[Test Results]");
-    println!("Expected rows: 30");
-    println!("Actual rows:   {}", count);
+    println!("Catalog integrity check: PASSED");
     
     let next_oid = CatalogManager::find_next_avalible_oid(sm.clone(), tm.clone());
     println!("Next available OID in system: {}", next_oid);
 
     assert_eq!(count, 30, "Concurrency test failed: row count mismatch!");
 
-     bpm.flush_all(); // TODO: Ideally we should ensure flushing happens automatically (after code ends)
+    bpm.flush_all(); 
 }

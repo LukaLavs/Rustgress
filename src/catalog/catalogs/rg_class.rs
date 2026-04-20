@@ -39,6 +39,20 @@ impl RGSomething for RGClass {
             Value::Integer(self.relnatts),
         ])
     }
+    fn from_tuple(tuple: &Tuple) -> Self {
+        let schema = Self::get_schema();
+        let values = schema.unpack_from_tuple(tuple);
+        
+        Self {
+            oid:      values[0].as_i32().unwrap(),
+            relname:  values[1].as_str().to_string(),
+            relnamespace: values[2].as_i32().unwrap(),
+            relpages: values[3].as_i32().unwrap(),
+            reltuples: values[4].as_f32().unwrap(),
+            relspecial: values[5].as_i32().unwrap(),
+            relnatts: values[6].as_i32().unwrap(),
+        }
+    }
     fn get_oid() -> u32 { RG_CLASS_OID }
 }
 

@@ -35,32 +35,9 @@ impl Schema {
             } else {
                 // Nastavimo bit na 1 (NOT NULL)
                 null_bitmap[i / 8] |= 1 << (i % 8);
-
-                match (value, &self.columns[i].data_type) {
-                    (Value::Integer(v), DataType::Integer) => buffer.extend_from_slice(&v.to_le_bytes()),
-                    (Value::Boolean(b), DataType::Boolean) => buffer.push(if *b { 1 } else { 0 }),
-                    (Value::Timestamp(t), DataType::Timestamp) => buffer.extend_from_slice(&t.to_le_bytes()),
-                    (Value::Varchar(s), DataType::Varchar(_)) => {
-                        buffer.extend_from_slice(&(s.len() as u16).to_le_bytes());
-                        buffer.extend_from_slice(s.as_bytes());
-                    }
-                    (Value::Float(f), DataType::Float) => {
-                        buffer.extend_from_slice(&f.to_le_bytes());
-                    }
-                    (Value::Double(d), DataType::Double) => {
-                        // Hardcore performance: Double bi moral biti poravnan na 8 bajtov
-                        // Za zdaj ga dodamo direktno, a v prihodnje lahko tukaj dodava padding
-                        buffer.extend_from_slice(&d.to_le_bytes());
-                    }
-                    (Value::Numeric(s), DataType::Numeric(_, _)) => {
-                        buffer.extend_from_slice(&(s.len() as u16).to_le_bytes());
-                        buffer.extend_from_slice(s.as_bytes());
-                    }
-                    _ => panic!("Type mismatch for column {}", self.columns[i].name),
-                }
+                value.pack(&mut buffer);
             }
         }
-
         // 2. Izračun t_hoff (Header + Bitmap + Padding)
         let header_size = std::mem::size_of::<HeapTupleHeaderData>();
         let mut hoff = header_size;
@@ -82,7 +59,7 @@ impl Schema {
         // 4. Ustvarjanje glave
         // Opomba: t_infomask2 vsebuje natts v spodnjih 11 bitih
         let header = HeapTupleHeaderData {
-            t_xmin: 101,
+            t_xmin: 101, // TODO: hardcoded, should be set by transaction manager
             t_xmax: 0,
             t_ctid_page: 0,
             t_ctid_slot: 0,
@@ -96,138 +73,28 @@ impl Schema {
     }
 
     pub fn unpack(&self, view: &HeapTupleView) -> Vec<Value> {
-        let mut values = Vec::new();
-        let mut cursor = 0;
-        let _header = view.header();
-        let raw_data = view.data();
-        
-        // Pridobimo bitmapo iz view-a, če obstaja
-        let bitmap = view.null_bitmap();
+        self.unpack_raw(view.data(), view.null_bitmap())
+    }
 
-        for (i, col) in self.columns.iter().enumerate() {
-            // Preverimo NULL stanje
-            let is_not_null = if let Some(map) = bitmap {
-                (map[i / 8] & (1 << (i % 8))) != 0
-            } else {
-                true // Če bitmape ni, so vsi NOT NULL
-            };
-
-            if !is_not_null {
-                values.push(Value::Null);
-                continue;
-            }
-
-            match col.data_type {
-                DataType::Integer => {
-                    let val = i32::from_le_bytes(raw_data[cursor..cursor+4].try_into().unwrap());
-                    values.push(Value::Integer(val));
-                    cursor += 4;
-                }
-                DataType::Boolean => {
-                    values.push(Value::Boolean(raw_data[cursor] == 1));
-                    cursor += 1;
-                }
-                DataType::Timestamp => {
-                    let val = i64::from_le_bytes(raw_data[cursor..cursor+8].try_into().unwrap());
-                    values.push(Value::Timestamp(val));
-                    cursor += 8;
-                }
-                DataType::Varchar(_) => {
-                    if cursor + 2 > raw_data.len() { panic!("Cursor out of bounds for VARCHAR len"); }
-                    let len = u16::from_le_bytes(raw_data[cursor..cursor+2].try_into().unwrap()) as usize;
-                    cursor += 2;
-                    if cursor + len > raw_data.len() {
-                        panic!("VARLENA ERROR: Tuple data too short! Want {}, have {}. Cursor: {}, hoff: {}", 
-                            len, raw_data.len() - cursor, cursor, view.header.t_hoff);
-                    }
-                    let s = std::str::from_utf8(&raw_data[cursor..cursor+len]).unwrap();
-                    values.push(Value::Varchar(s.to_string()));
-                    cursor += len;
-                }
-                DataType::Float => {
-                    let val = f32::from_le_bytes(raw_data[cursor..cursor+4].try_into().unwrap());
-                    values.push(Value::Float(val));
-                    cursor += 4;
-                }
-                DataType::Double => {
-                    let val = f64::from_le_bytes(raw_data[cursor..cursor+8].try_into().unwrap());
-                    values.push(Value::Double(val));
-                    cursor += 8;
-                }
-                DataType::Numeric(_, _) => {
-                    // same as Varlena
-                    if cursor + 2 > raw_data.len() { panic!("Cursor out of bounds for Numeric len"); }
-                    let len = u16::from_le_bytes(raw_data[cursor..cursor+2].try_into().unwrap()) as usize;
-                    cursor += 2;
-                    
-                    if cursor + len > raw_data.len() {
-                        panic!("NUMERIC VARLENA ERROR: Tuple data too short!");
-                    }
-                    
-                    let s = std::str::from_utf8(&raw_data[cursor..cursor+len]).expect("Invalid Numeric UTF-8");
-                    values.push(Value::Numeric(s.to_string()));
-                    cursor += len;
-                }
-            }
-        }
-        values
+    pub fn unpack_from_tuple(&self, tuple: &Tuple) -> Vec<Value> {
+        let bitmap = if tuple.null_bitmap.is_empty() { None } else { Some(&tuple.null_bitmap[..]) };
+        self.unpack_raw(&tuple.data, bitmap)
     }
 }
 
+
 impl Schema {
-    pub fn unpack_from_tuple(&self, tuple: &Tuple) -> Vec<Value> {
+    pub fn unpack_raw(&self, raw_data: &[u8], bitmap: Option<&[u8]>) -> Vec<Value> {
         let mut values = Vec::new();
         let mut cursor = 0;
 
         for (i, col) in self.columns.iter().enumerate() {
-            let is_null = if !tuple.null_bitmap.is_empty() {
-                (tuple.null_bitmap[i / 8] & (1 << (i % 8))) == 0
-            } else {
-                false
-            };
+            let is_not_null = bitmap.map_or(true, |b| (b[i/8] & (1 << (i%8))) != 0);
 
-            if is_null {
+            if is_not_null {
+                values.push(col.data_type.unpack(raw_data, &mut cursor));
+            } else {
                 values.push(Value::Null);
-                continue;
-            }
-            
-            match col.data_type {
-                DataType::Integer => {
-                    let val = i32::from_le_bytes(tuple.data[cursor..cursor+4].try_into().unwrap());
-                    values.push(Value::Integer(val));
-                    cursor += 4;
-                }
-                DataType::Boolean => {
-                    values.push(Value::Boolean(tuple.data[cursor] == 1));
-                    cursor += 1;
-                }
-                DataType::Timestamp => {
-                    let val = i64::from_le_bytes(tuple.data[cursor..cursor+8].try_into().unwrap());
-                    values.push(Value::Timestamp(val));
-                    cursor += 8;
-                }
-                DataType::Varchar(_) | DataType::Numeric(_, _) => {
-                    let len = u16::from_le_bytes(tuple.data[cursor..cursor+2].try_into().unwrap()) as usize;
-                    cursor += 2;
-                    let s = std::str::from_utf8(&tuple.data[cursor..cursor+len]).unwrap();
-                    
-                    if let DataType::Varchar(_) = col.data_type {
-                        values.push(Value::Varchar(s.to_string()));
-                    } else {
-                        values.push(Value::Numeric(s.to_string()));
-                    }
-                    cursor += len;
-                }
-                DataType::Float => {
-                    let val = f32::from_le_bytes(tuple.data[cursor..cursor+4].try_into().unwrap());
-                    values.push(Value::Float(val));
-                    cursor += 4;
-                }
-                DataType::Double => {
-                    let val = f64::from_le_bytes(tuple.data[cursor..cursor+8].try_into().unwrap());
-                    values.push(Value::Double(val));
-                    cursor += 8;
-                }
             }
         }
         values

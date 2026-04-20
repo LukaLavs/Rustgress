@@ -1,6 +1,6 @@
 use super::header::PageHeaderData;
 use crate::access::tuple::header::{HeapTupleView, ItemIdData, Tuple, item_id_flags};
-use crate::common::types::{BLCKSZ, LocationIndex, OffsetNumber};
+use crate::common::types::{BLCKSZ, LocationIndex, OffsetNumber, TransactionId, RowId};
 use core::option::Option;
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -125,4 +125,60 @@ impl Page {
         let raw_tuple = &self.data[start..end];
         Some(HeapTupleView::new(raw_tuple))
     }
+}
+
+
+impl Page {
+    fn get_tuple_offset(&self, slot_num: OffsetNumber) -> Option<usize> {
+        if slot_num == 0 { return None; }
+        let header_size = std::mem::size_of::<PageHeaderData>() as u16;
+        let item_id_size = std::mem::size_of::<ItemIdData>() as u16;
+        let offset_to_id = header_size + (slot_num - 1) * item_id_size;
+
+        if offset_to_id + item_id_size > self.get_header().pd_lower { return None; }
+
+        let item_id = unsafe {
+            let ptr = self.data.as_ptr().add(offset_to_id as usize) as *const ItemIdData;
+            std::ptr::read_unaligned(ptr)
+        };
+
+        if item_id.lp_flags() != item_id_flags::LP_NORMAL { return None; }
+        Some(item_id.lp_off() as usize)
+    }
+
+    pub fn update_tuple_header<F>(&mut self, slot_num: OffsetNumber, f: F) -> bool 
+    where F: FnOnce(&mut crate::access::tuple::header::HeapTupleHeaderData) 
+    {
+        if let Some(offset) = self.get_tuple_offset(slot_num) {
+            let header_len = std::mem::size_of::<crate::access::tuple::header::HeapTupleHeaderData>();
+            
+            // Preberemo obstoječo glavo
+            let mut header = {
+                let bytes = &self.data[offset..offset + header_len];
+                crate::access::tuple::header::HeapTupleHeaderData::read_from_prefix(bytes).unwrap().0
+            };
+
+            // Pokličemo closure, da spremeni polja
+            f(&mut header);
+
+            // Zapišemo nazaj
+            self.data[offset..offset + header_len].copy_from_slice(header.as_bytes());
+            return true;
+        }
+        false
+    }
+
+    pub fn set_xmax(&mut self, slot_num: OffsetNumber, xid: TransactionId) -> bool {
+        self.update_tuple_header(slot_num, |h| {
+            h.t_xmax = xid;
+        })
+    }
+
+    pub fn set_ctid(&mut self, slot_num: OffsetNumber, new_rid: RowId) -> bool {
+        self.update_tuple_header(slot_num, |h| {
+            h.t_ctid_page = new_rid.page_id;
+            h.t_ctid_slot = new_rid.slot_num as u16;
+        })
+    }
+
 }

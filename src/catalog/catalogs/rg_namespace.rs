@@ -5,10 +5,10 @@ use super::traits::RGSomething;
 use crate::common::constants::{RG_NAMESPACE_OID};
 
 pub struct RGNamespace {
-    pub oid: u32,             // unique table identifier
+    pub oid: i32,             // unique table identifier
     pub nspname: String,      // schema name
-    pub nspowner: u32,        // owner of the schema
-    pub nspacl: u32,          // owner's permissions
+    pub nspowner: i32,        // owner of the schema
+    pub nspacl: i32,          // owner's permissions
 }
 
 impl RGSomething for RGNamespace {
@@ -28,6 +28,17 @@ impl RGSomething for RGNamespace {
             Value::Integer(self.nspowner as i32),
             Value::Integer(self.nspacl as i32),
         ])
+    }
+    fn from_tuple(tuple: &Tuple) -> Self {
+        let schema = Self::get_schema();
+        let values = schema.unpack_from_tuple(tuple);
+        
+        Self {
+            oid:      values[0].as_i32().unwrap(),
+            nspname:  values[1].as_str().to_string(),
+            nspowner: values[2].as_i32().unwrap(),
+            nspacl:   values[3].as_i32().unwrap(),
+        }
     }
     fn get_oid() -> u32 { RG_NAMESPACE_OID }
 }

@@ -32,6 +32,17 @@ impl RGSomething for RGAttribute {
             Value::Integer(self.attlen as i32),
         ])
     }
+    fn from_tuple(tuple: &Tuple) -> Self {
+        let schema = Self::get_schema();
+        let values = schema.unpack_from_tuple(tuple);
+        Self {
+            attrelid: values[0].as_i32().unwrap(),
+            attname:  values[1].as_str().to_string(),
+            atttypid: values[2].as_i32().unwrap(),
+            attnum:   values[3].as_i32().unwrap(),
+            attlen:   values[4].as_i32().unwrap(),
+        }
+    }
     fn get_oid() -> u32 { RG_ATTRIBUTE_OID }
 }
 

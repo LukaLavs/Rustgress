@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 bitfield = "0.19.4"
 bitflags = "2.11.0"
+bytes = "1.11.1"
 memoffset = "0.9.1"
+tokio = { version = "1.52.1", features = ["full", "macros", "net", "rt-multi-thread"] }
 zerocopy = "0.8.48"
 zerocopy-derive = "0.8.48"
