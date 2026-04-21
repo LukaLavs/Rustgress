@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
-use crate::catalog::types::DataType;
+use crate::catalog::types::{DataType};
 use crate::storage::manager::StorageManager;
 use crate::access::transaction::manager::TransactionManager;
-use crate::access::heap::heap_access::HeapAccess;
-use crate::catalog::schema::Schema;
+use crate::access::heap::access::HeapAccess;
+use crate::access::tuple::desc::{TupleDescriptor, Column};
 use crate::common::constants::{
     RG_ATTRIBUTE_OID, RG_CLASS_OID, RG_TYPE_OID, RG_NAMESPACE_OID,
     USER_XID_START
@@ -17,7 +17,6 @@ use crate::catalog::catalogs::{
     rg_namespace::RGNamespace,
 };
 use crate::access::heap::scan::HeapScan;
-use crate::catalog::schema::Column;
 
 pub struct CatalogManager {
     pub storage: Arc<StorageManager>,
@@ -43,7 +42,7 @@ impl CatalogManager {
         let rg_class_table = storage.get_table(rg_class_oid);
         let bpm = storage.get_bpm();
         let scan = HeapScan::new(bpm, rg_class_table, tm);
-        let schema = RGClass::get_schema();
+        let schema = RGClass::get_descriptor();
         let mut max_oid = USER_XID_START;
         for tuple in scan {
             let values = schema.unpack_from_tuple(&tuple);
@@ -67,7 +66,7 @@ impl CatalogManager {
         *lock += 1;
         oid
     }
-    pub fn create_table(&self, xid: u64, name: &str, special_size: u16, schema: &Schema) -> u32 {
+    pub fn create_table(&self, xid: u64, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
         let new_oid = self.generate_next_oid();
         Table::create(new_oid, special_size);
         {
@@ -75,8 +74,8 @@ impl CatalogManager {
             let mut table = table_handle.write().unwrap();
             table.extend(0); // TODO: hardcoded for now
         }
-        let rg_class_schema = RGClass::get_schema();
-        let rg_attribute_schema = RGAttribute::get_schema();
+        let rg_class_schema = RGClass::get_descriptor();
+        let rg_attribute_schema = RGAttribute::get_descriptor();
 
         let mut class_tuple = RGClass {
             oid: new_oid as i32,
@@ -145,7 +144,7 @@ impl CatalogManager {
 
 impl CatalogManager {
     /// Retrieves the schema of a table given its OID by scanning the rg_attribute catalog.
-    pub fn get_schema(&self, table_oid: u32) -> Schema {
+    pub fn get_schema(&self, table_oid: u32) -> TupleDescriptor {
         let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
         let scan = HeapScan::new(self.storage.get_bpm(), attr_table, self.tm.clone());
         let mut attributes: Vec<RGAttribute> = scan
@@ -160,7 +159,7 @@ impl CatalogManager {
                 data_type: DataType::from_oid(attr.atttypid as u32),
             })
             .collect();
-        Schema::new(columns)
+        TupleDescriptor::new(columns)
     }
     pub fn get_table_oid(&self, table_name: &str) -> Option<u32> {
         let table_handle = self.storage.get_table(RG_CLASS_OID);
@@ -186,10 +185,10 @@ impl CatalogManager {
         }
         let xid = self.tm.begin();
 
-        let rg_class_schema = RGClass::get_schema();
-        let rg_attribute_schema = RGAttribute::get_schema();
-        let rg_type_schema = RGType::get_schema();
-        let rg_namespace_schema = RGNamespace::get_schema();
+        let rg_class_schema = RGClass::get_descriptor();
+        let rg_attribute_schema = RGAttribute::get_descriptor();
+        let rg_type_schema = RGType::get_descriptor();
+        let rg_namespace_schema = RGNamespace::get_descriptor();
 
         self.bootstrap_rg_class(&rg_class_schema, xid);
         self.bootstrap_rg_attribute(&rg_attribute_schema, &rg_class_schema, 
@@ -201,7 +200,7 @@ impl CatalogManager {
         println!("Bootstrap finalized.");
     }
 
-    fn bootstrap_rg_class(&self, rg_class_schema: &Schema, xid: u64) {
+    fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor, xid: u64) {
         let class_entries = [
             (RG_CLASS_OID, "rg_class", 7), // rg_class  has 7 columns
             (RG_ATTRIBUTE_OID, "rg_attribute", 5),
@@ -228,8 +227,8 @@ impl CatalogManager {
     }
 
     fn bootstrap_rg_attribute(&self, 
-        rg_attribute_schema: &Schema, rg_class_schema: &Schema, 
-        rg_type_schema: &Schema, rg_namespace_schema: &Schema,
+        rg_attribute_schema: &TupleDescriptor, rg_class_schema: &TupleDescriptor, 
+        rg_type_schema: &TupleDescriptor, rg_namespace_schema: &TupleDescriptor,
         xid: u64) {
         for (i, col) in rg_class_schema.columns.iter().enumerate() {
             let mut tuple = RGAttribute {
@@ -275,7 +274,7 @@ impl CatalogManager {
         }
     }
 
-    fn bootstrap_rg_type(&self, rg_type_schema: &Schema, xid: u64) {
+    fn bootstrap_rg_type(&self, rg_type_schema: &TupleDescriptor, xid: u64) {
         // Definiramo seznam vseh osnovnih tipov, ki jih sistem podpira
         let type_definitions = DataType::type_definitions();
         for (oid, name, len, byval) in type_definitions {
@@ -294,7 +293,7 @@ impl CatalogManager {
         }
     }
 
-    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &Schema, xid: u64) {
+    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &TupleDescriptor, xid: u64) {
         let mut tuple = RGNamespace {
             oid: RG_NAMESPACE_OID as i32,
             nspname: "public".to_string(),

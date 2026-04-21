@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use crate::access::transaction::clog::{CLog, XidStatus};
-use crate::common::types::CLOG_FILE_PATH;
+use crate::common::constants::CLOG_FILE_PATH;
 
 pub type TransactionId = u64;
 
@@ -85,30 +85,21 @@ impl TransactionManager {
 }
 
 impl CLog {
-    pub fn find_last_xid(&self) -> u64 {
-        // 1. Skeniramo bajte od zadaj naprej, da najdemo zadnji bajt, ki ni popolnoma prazen
+    pub fn find_last_xid(&self) -> u64 { // find last non null byte in CLOG.
+        // TODO: maybe we could store the last assigned XID in some catalog.
         let last_non_zero_byte = self.data.iter().enumerate().rev().find(|&(_, byte)| *byte != 0);
-
         if let Some((byte_idx, &byte)) = last_non_zero_byte {
-            // 2. V tem bajtu so 4 transakcije. Preverimo vsako (2 bita) od desne proti levi.
-            // i=3 je zadnja transakcija v bajtu, i=0 je prva.
             for i in (0..4).rev() {
                 let bit_shift = i * 2;
-                let status = (byte >> bit_shift) & 0b11; // maska 0b11 izbere 2 bita
-
-                // 3. Če status ni InProgress (00), smo našli zadnjo aktivnost
+                let status = (byte >> bit_shift) & 0b11;
                 if status != 0 {
                     let last_xid = (byte_idx as u64 * 4) + i as u64;
                     return last_xid;
                 }
             }
-            // Če so vsi biti v bajtu čudežno 0 (se ne bi smelo zgoditi zaradi .find()),
-            // vrnemo začetek tega bajta.
             return byte_idx as u64 * 4;
         }
-
-        // 4. Če je cel CLOG prazen (samo ničle), vrnemo 0
-        0
+        0 // no transactions found.
     }
 }
 pub struct Snapshot {

@@ -1,14 +1,13 @@
 use std::sync::{Arc, RwLock};
+use crate::common::constants::RG_CLASS_OID;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag, BufferFrame};
 use crate::storage::disk::manager::Table;
-use crate::storage::page::layout::Page;
-use crate::access::tuple::header::{Tuple, HeapTupleView};
+use crate::storage::page::page::Page;
+use crate::access::tuple::tuple::{HeapTuple, HeapTupleView};
 use super::super::transaction::manager::{TransactionManager, Snapshot};
 use std::collections::HashMap;
 use std::cell::RefCell;
-use crate::catalog::schema::Schema;
-use crate::catalog::catalogs::rg_class::RGClass;
-use crate::catalog::catalogs::traits::RGSomething;
+use crate::access::tuple::desc::TupleDescriptor;
 use crate::storage::manager::StorageManager;
 
 pub struct HeapScan {
@@ -52,7 +51,7 @@ impl HeapScan {
 }
 
 impl<'a> Iterator for HeapScan {
-    type Item = Tuple;
+    type Item = HeapTuple;
 
     fn next(&mut self) -> Option<Self::Item> {
         let num_pages = self.table.read().unwrap().num_pages();
@@ -76,7 +75,7 @@ impl<'a> Iterator for HeapScan {
             while self.current_slot_idx <= num_slots {
                 let slot = self.current_slot_idx;
                 self.current_slot_idx += 1;
-                if let Some(raw_tuple_bytes) = page.get_tuple_bytes(slot) {
+                if let Some(raw_tuple_bytes) = page.get_item(slot) {
                     let view = HeapTupleView::new(raw_tuple_bytes);
                     let t_xmax = view.header.t_xmax;
                     let is_deleted_and_visible = t_xmax != 0 && self.is_xid_visible(t_xmax as u64);
@@ -85,7 +84,7 @@ impl<'a> Iterator for HeapScan {
                         let mut header = view.header;
                         header.t_ctid_page = self.current_page_idx;
                         header.t_ctid_slot = slot;
-                        return Some(Tuple {
+                        return Some(HeapTuple {
                             header: header,
                             null_bitmap: view.null_bitmap().map(|b| b.to_vec()).unwrap_or_default(),
                             data: view.data().to_vec(),
@@ -118,10 +117,10 @@ impl HeapScan{
     pub fn get_table_oid(
         storage: Arc<StorageManager>,
         tm: Arc<TransactionManager>,
-        class_schema: &Schema, 
+        class_schema: &TupleDescriptor, 
         target_table_name: &str
     ) -> Option<i32> {
-        let rg_class_table = storage.get_table(RGClass::get_oid());
+        let rg_class_table = storage.get_table(RG_CLASS_OID);
         let bpm = storage.get_bpm();
         let scan = HeapScan::new(bpm, rg_class_table, tm);
         for tuple in scan {

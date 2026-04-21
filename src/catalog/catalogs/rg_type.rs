@@ -1,8 +1,7 @@
-use super::super::schema::{Schema, Column};
+use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
-use crate::access::tuple::header::Tuple;
+use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
-use crate::common::constants::{RG_TYPE_OID};
 
 pub struct RGType {
     pub oid: i32,           // unique type identifier
@@ -12,8 +11,8 @@ pub struct RGType {
 }
 
 impl RGSomething for RGType {
-    fn get_schema() -> Schema {
-        Schema::new(vec![
+    fn get_descriptor() -> TupleDescriptor {
+        TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
             Column { name: "typname".to_string(), data_type: DataType::Varchar(64) },
             Column { name: "typlen".to_string(), data_type: DataType::Integer }, // i16 shranimo kot Integer
@@ -21,7 +20,7 @@ impl RGSomething for RGType {
         ])
     }
 
-    fn make_tuple(self, schema: &Schema) -> Tuple {
+    fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid),
             Value::Varchar(self.typname),
@@ -30,19 +29,15 @@ impl RGSomething for RGType {
         ])
     }
 
-    fn from_tuple(tuple: &Tuple) -> Self {
-            let schema = Self::get_schema();
-            let values = schema.unpack_from_tuple(tuple);
-            
-            Self {
-                oid:      values[0].as_i32().unwrap(),
-                typname:  values[1].as_str().to_string(),
-                typlen:   values[2].as_i32().unwrap(),
-                typbyval: values[3].as_bool().unwrap(),
-            }
-        }
+    fn from_tuple(tuple: &HeapTuple) -> Self {
+        let schema = Self::get_descriptor();
+        let values = schema.unpack_from_tuple(tuple);
         
-    fn get_oid() -> u32 { 
-        RG_TYPE_OID 
+        Self {
+            oid:      values[0].as_i32().unwrap(),
+            typname:  values[1].as_str().to_string(),
+            typlen:   values[2].as_i32().unwrap(),
+            typbyval: values[3].as_bool().unwrap(),
+        }
     }
 }

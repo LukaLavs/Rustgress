@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::storage::disk::manager::Table;
-use crate::storage::page::layout::Page;
+use crate::storage::page::page::Page;
 
 pub type BufferId = usize;
 
@@ -55,7 +55,7 @@ impl BufferPoolManager {
         }
     }
 
-    pub fn fetch_page(&self, tag: BufferTag, table: &mut Table) -> Arc<BufferFrame> {
+    pub(crate) fn fetch_page(&self, tag: BufferTag, table: &mut Table) -> Arc<BufferFrame> {
         // check if table was read already
         let existing_buf_id = {
             let table_read = self.page_table.read().unwrap();
@@ -132,7 +132,7 @@ impl BufferPoolManager {
         }
     }
 
-    pub fn unpin_page(&self, buf_id: BufferId) {
+    pub(crate) fn unpin_page(&self, buf_id: BufferId) {
         let frame = &self.frames[buf_id];
         let mut pins = frame.pin_count.lock().unwrap();
         if *pins > 0 {
@@ -140,7 +140,7 @@ impl BufferPoolManager {
         }
     }
 
-    pub fn mark_dirty(&self, buf_id: BufferId) {
+    pub(crate) fn mark_dirty(&self, buf_id: BufferId) {
         let frame = &self.frames[buf_id];
         let mut dirty = frame.is_dirty.lock().unwrap();
         *dirty = true;
@@ -155,53 +155,33 @@ impl BufferPoolManager {
                 let data_read = frame.data.read().unwrap();
                 table.write_page_raw(tag.page_idx, &data_read.data);
                 *dirty = false;
-                println!("SUCCESS: Buffer {} flushed to disk (page {})", buf_id, tag.page_idx); // TODO: Remove this temp debug println!
+                println!("FLUSSHED.");
             }
         }
     }
 }
 
 
-impl BufferPoolManager { // TODO:
-    // ... obstoječe metode ...
-
-    /// Prisilno zapiše vse "umazane" (dirty) strani iz vseh okvirjev na disk.
-    /// Uporablja lokalni cache tabel, da prepreči nenehno odpiranje datotek.
+impl BufferPoolManager {
+    /// Writes all dirty pages from all frames to disk, using a local cache of tables to avoid repeated file openings.
     pub fn flush_all(&self) {
         let page_table = self.page_table.read().unwrap();
         let mut table_cache: HashMap<u32, Table> = HashMap::new();
 
-        println!("[BPM] Začenjam prisilni flush vseh umazanih strani...");
-
         for (tag, &buf_id) in page_table.iter() {
             let frame = &self.frames[buf_id];
-            
-            // 1. Preveri, če je stran sploh umazana (brez dolgotrajnega zaklepanja)
             let mut is_dirty = frame.is_dirty.lock().unwrap();
             if !*is_dirty {
                 continue;
             }
-
-            // 2. Pridobi Table objekt (iz cache-a ali odpri na novo)
+            // Get table from cache or open if not present
             let table = table_cache
                 .entry(tag.table_oid)
                 .or_insert_with(|| Table::open(tag.table_oid));
-
-            // 3. Zapiši podatke
             let data_lock = frame.data.read().unwrap();
-            
-            // Uporabimo write_page_raw, ki že vključuje seek in flush() na nivoju datoteke
             table.write_page_raw(tag.page_idx, &data_lock.data);
-            
-            // 4. Ponastavi dirty zastavico
             *is_dirty = false;
-            
-            println!(
-                "  -> Flush uspel: Tabela {}, Stran {}, Frame {}", 
-                tag.table_oid, tag.page_idx, buf_id
-            );
         }
-        
-        println!("[BPM] Flush vseh strani zaključen.");
+        println!("FLUSSHED.")
     }
 }

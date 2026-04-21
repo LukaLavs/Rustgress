@@ -1,3 +1,9 @@
+use super::types::PageSizeVersion;
+
+pub const BLCKSZ: usize = 8192; // page size in bytes
+pub const PAGE_SIZE_VERSION: PageSizeVersion = (BLCKSZ as u16) << 8 | 0;
+pub const CLOG_FILE_PATH: &str = "data/clog.dat";
+
 pub const RG_CLASS_OID: u32 = 1;
 pub const RG_ATTRIBUTE_OID: u32 = 2;
 pub const RG_NAMESPACE_OID: u32 = 3;

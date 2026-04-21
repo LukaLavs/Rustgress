@@ -6,9 +6,9 @@ mod tests {
     use rustgress::storage::manager::StorageManager;
     use rustgress::access::transaction::manager::TransactionManager;
     use rustgress::catalog::manager::CatalogManager;
-    use rustgress::catalog::schema::{Schema, Column};
+    use rustgress::access::tuple::desc::{TupleDescriptor, Column};
     use rustgress::catalog::types::{DataType, Value};
-    use rustgress::access::heap::heap_access::HeapAccess;
+    use rustgress::access::heap::access::HeapAccess;
     use rustgress::access::heap::scan::HeapScan;
 
     #[test]
@@ -26,7 +26,7 @@ mod tests {
         // ==========================================================
         // 2. CONCURRENCY & BASIC INSERT (Iz tvojega maina)
         // ==========================================================
-        let schema_msg = Arc::new(Schema::new(vec![
+        let schema_msg = Arc::new(TupleDescriptor::new(vec![
             Column { name: "user_id".to_string(), data_type: DataType::Integer },
             Column { name: "msg".to_string(), data_type: DataType::Varchar(100) },
         ]));
@@ -73,7 +73,7 @@ mod tests {
         // ==========================================================
         // 4. NULL BITMAP TEST
         // ==========================================================
-        let schema_null = Schema::new(vec![
+        let schema_null = TupleDescriptor::new(vec![
             Column { name: "c1".to_string(), data_type: DataType::Integer },
             Column { name: "c2".to_string(), data_type: DataType::Integer },
         ]);
@@ -93,7 +93,7 @@ mod tests {
         // ==========================================================
         // 5. PAGE OVERFLOW TEST
         // ==========================================================
-        let schema_big = Schema::new(vec![Column { name: "b".to_string(), data_type: DataType::Varchar(1000) }]);
+        let schema_big = TupleDescriptor::new(vec![Column { name: "b".to_string(), data_type: DataType::Varchar(1000) }]);
         let xid_b = tm.begin();
         let big_oid = cm.create_table(xid_b, "big_table", 0, &schema_big);
         

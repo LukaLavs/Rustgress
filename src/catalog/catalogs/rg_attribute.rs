@@ -1,8 +1,7 @@
-use super::super::schema::{Schema, Column};
+use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
-use crate::access::tuple::header::Tuple;
+use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
-use crate::common::constants::{RG_ATTRIBUTE_OID};
 
 pub struct RGAttribute {
     pub attrelid: i32,        // table OID this column belongs to
@@ -14,8 +13,8 @@ pub struct RGAttribute {
 }
 
 impl RGSomething for RGAttribute {
-    fn get_schema() -> Schema {
-        Schema::new(vec![
+    fn get_descriptor() -> TupleDescriptor {
+        TupleDescriptor::new(vec![
             Column { name: "attrelid".to_string(), data_type: DataType::Integer },
             Column { name: "attname".to_string(), data_type: DataType::Varchar(64) },
             Column { name: "atttypid".to_string(), data_type: DataType::Integer },
@@ -23,7 +22,7 @@ impl RGSomething for RGAttribute {
             Column { name: "attlen".to_string(), data_type: DataType::Integer },
         ])
     }
-    fn make_tuple(self, schema: &Schema) -> Tuple {
+    fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.attrelid as i32),
             Value::Varchar(self.attname),
@@ -32,8 +31,8 @@ impl RGSomething for RGAttribute {
             Value::Integer(self.attlen as i32),
         ])
     }
-    fn from_tuple(tuple: &Tuple) -> Self {
-        let schema = Self::get_schema();
+    fn from_tuple(tuple: &HeapTuple) -> Self {
+        let schema = Self::get_descriptor();
         let values = schema.unpack_from_tuple(tuple);
         Self {
             attrelid: values[0].as_i32().unwrap(),
@@ -43,6 +42,5 @@ impl RGSomething for RGAttribute {
             attlen:   values[4].as_i32().unwrap(),
         }
     }
-    fn get_oid() -> u32 { RG_ATTRIBUTE_OID }
 }
 

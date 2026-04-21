@@ -1,9 +1,9 @@
 use bitflags::bitflags;
 use crate::common::types::{
     CheckSum, LocationIndex, PageSizeVersion, TransactionId,
-    BLCKSZ, PAGE_SIZE_VERSION,
 };
-use crate::access::tuple::header::ItemIdData;
+use crate::common::constants::{BLCKSZ, PAGE_SIZE_VERSION};
+use super::item::ItemIdData;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 

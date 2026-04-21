@@ -1,11 +1,6 @@
-
-use crate::access::tuple::header::{
-    HeapTupleHeaderData, Tuple,
-};
-use crate::access::tuple::header::{
-    HeapTupleView, TupleInfoMask,
-};
-use super::types::{DataType, Value};
+use crate::access::tuple::header::{TupleInfoMask, HeapTupleHeaderData};
+use crate::access::tuple::tuple::{HeapTupleView, HeapTuple};
+use crate::catalog::types::{DataType, Value};
 
 #[derive(Debug, Clone)] 
 pub struct Column { 
@@ -13,51 +8,43 @@ pub struct Column {
     pub data_type: DataType 
 }
 #[derive(Debug, Clone)] 
-pub struct Schema { 
+pub struct TupleDescriptor { 
     pub columns: Vec<Column> 
 }
 
-impl Schema {
-    pub fn new(columns: Vec<Column>) -> Self { Schema { columns } }
+impl TupleDescriptor {
+    pub fn new(columns: Vec<Column>) -> Self { TupleDescriptor { columns } }
 
-    pub fn pack(&self, values: Vec<Value>) -> Tuple {
+    pub fn pack(&self, values: Vec<Value>) -> HeapTuple {
         let mut buffer = Vec::new();
         
-        // 1. Priprava bitmape (1 bajt na vsakih 8 stolpcev)
-        let bitmap_len = (self.columns.len() + 7) / 8;
+        let bitmap_len = (self.columns.len() + 7) / 8; // alignment!
         let mut null_bitmap = vec![0u8; bitmap_len];
         let mut has_null = false;
 
         for (i, value) in values.iter().enumerate() {
             if let Value::Null = value {
                 has_null = true;
-                // Bit pustimo na 0 (Postgres stil: 0 = NULL, 1 = NOT NULL)
+                // leave bit as 0 for NULL
             } else {
-                // Nastavimo bit na 1 (NOT NULL)
-                null_bitmap[i / 8] |= 1 << (i % 8);
+                null_bitmap[i / 8] |= 1 << (i % 8); // set bit to 1 for NOT NULL
                 value.pack(&mut buffer);
             }
         }
-        // 2. Izračun t_hoff (Header + Bitmap + Padding)
         let header_size = std::mem::size_of::<HeapTupleHeaderData>();
         let mut hoff = header_size;
         if has_null {
             hoff += null_bitmap.len();
         } else {
-            null_bitmap.clear(); // Če ni null-ov, bitmape ne bo v bufferju
+            null_bitmap.clear(); // no null bitmap if there are no nulls
         }
         
-        // Poravnava na 8 bajtov (MAXALIGN v Postgresu)
-        hoff = (hoff + 7) & !7;
+        hoff = (hoff + 7) & !7; // 8 byte alignment (MAXALIGN)
 
-        // 3. Nastavitev zastavic
         let mut mask = TupleInfoMask::empty();
         if has_null {
             mask.insert(TupleInfoMask::HEAP_HASNULL);
         }
-
-        // 4. Ustvarjanje glave
-        // Opomba: t_infomask2 vsebuje natts v spodnjih 11 bitih
         let header = HeapTupleHeaderData {
             t_xmin: 101, // TODO: hardcoded, should be set by transaction manager
             t_xmax: 0,
@@ -69,28 +56,26 @@ impl Schema {
             t_hoff: hoff as u8,
         };
 
-        Tuple { header, null_bitmap, data: buffer }
+        HeapTuple { header, null_bitmap, data: buffer }
     }
 
     pub fn unpack(&self, view: &HeapTupleView) -> Vec<Value> {
         self.unpack_raw(view.data(), view.null_bitmap())
     }
 
-    pub fn unpack_from_tuple(&self, tuple: &Tuple) -> Vec<Value> {
+    pub fn unpack_from_tuple(&self, tuple: &HeapTuple) -> Vec<Value> {
         let bitmap = if tuple.null_bitmap.is_empty() { None } else { Some(&tuple.null_bitmap[..]) };
         self.unpack_raw(&tuple.data, bitmap)
     }
 }
 
 
-impl Schema {
+impl TupleDescriptor {
     pub fn unpack_raw(&self, raw_data: &[u8], bitmap: Option<&[u8]>) -> Vec<Value> {
         let mut values = Vec::new();
         let mut cursor = 0;
-
         for (i, col) in self.columns.iter().enumerate() {
             let is_not_null = bitmap.map_or(true, |b| (b[i/8] & (1 << (i%8))) != 0);
-
             if is_not_null {
                 values.push(col.data_type.unpack(raw_data, &mut cursor));
             } else {

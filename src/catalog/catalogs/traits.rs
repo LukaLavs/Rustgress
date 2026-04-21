@@ -1,9 +1,8 @@
-use super::super::schema::{Schema};
-use crate::access::tuple::header::Tuple;
+use crate::access::tuple::desc::{TupleDescriptor};
+use crate::access::tuple::tuple::HeapTuple;
 
-pub trait RGSomething {
-    fn get_schema() -> Schema;
-    fn make_tuple(self, schema: &Schema) -> Tuple;
-    fn from_tuple(tuple: &Tuple) -> Self where Self: Sized;
-    fn get_oid() -> u32;
+pub trait RGSomething: Sized {
+    fn get_descriptor() -> TupleDescriptor;
+    fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple;
+    fn from_tuple(tuple: &HeapTuple) -> Self;
 }

@@ -1,36 +1,6 @@
-use crate::common::types::{TransactionId, HeapTupleData, RowId};
+use crate::common::types::{TransactionId, RowId};
 use zerocopy_derive::{IntoBytes, FromBytes, Immutable, KnownLayout};
-use zerocopy::{IntoBytes, FromBytes};
 use bitflags::bitflags;
-
-
-pub mod item_id_flags {
-    pub const LP_UNUSED: u8 = 0;
-    pub const LP_NORMAL: u8 = 1;
-    pub const LP_REDIRECT: u8 = 2;
-    pub const LP_DEAD: u8 = 3;
-}
-
-#[repr(transparent)]
-#[derive(IntoBytes, FromBytes, Immutable, KnownLayout, Debug, Copy, Clone)]
-/// ItemIdData encodes the offset, length, and flags for a tuple in a page.
-/// It is stored in the line pointer array of a page header and points to the actual tuple data in the page.
-pub struct ItemIdData(pub u32);
-
-impl ItemIdData {
-    // First 15 bits: offset to tuple data, next 2 bits: flags, last 15 bits: length of tuple data
-    pub fn new(off: u16, len: u16, flags: u8) -> Self {
-        Self((off as u32 & 0x7FFF) | ((flags as u32 & 0x3) << 15) | ((len as u32 & 0x7FFF) << 17))
-    }
-    pub fn lp_off(&self) -> u16 { (self.0 & 0x7FFF) as u16 }
-    pub fn lp_flags(&self) -> u8 { ((self.0 >> 15) & 0x3) as u8 }
-    pub fn lp_len(&self) -> u16 { (self.0 >> 17) as u16 }
-    pub fn set_lp_off(&mut self, off: u16) { self.0 = (self.0 & !0x7FFF) | (off as u32 & 0x7FFF) }
-    /// Possible flags: LP_UNUSED, LP_NORMAL, LP_REDIRECT, LP_DEAD.
-    pub fn set_lp_flags(&mut self, flags: u8) { self.0 = (self.0 & !(0x3 << 15)) | ((flags as u32 & 0x3) << 15) }
-    /// Length of the tuple data in bytes.
-    pub fn set_lp_len(&mut self, len: u16) { self.0 = (self.0 & !(0x7FFF << 17)) | ((len as u32 & 0x7FFF) << 17) }
-}
 
 
 bitflags! {
@@ -98,67 +68,3 @@ impl HeapTupleHeaderData {
         }
     }
 }
-
-
-pub struct Tuple {
-    pub header: HeapTupleHeaderData,
-    pub null_bitmap: Vec<u8>,
-    pub data: HeapTupleData,
-}
-
-impl Tuple {
-    /// Writes the tuple header, null bitmap, and data into the provided target buffer.
-    pub fn serialize_into(&self, target_buffer: &mut [u8]) {
-        let header_bytes = self.header.as_bytes();
-        let hoff = self.header.t_hoff as usize;
-        target_buffer[0..header_bytes.len()].copy_from_slice(header_bytes);
-        if !self.null_bitmap.is_empty() {
-            let bitmap_start = header_bytes.len();
-            let bitmap_end = bitmap_start + self.null_bitmap.len();
-            target_buffer[bitmap_start..bitmap_end].copy_from_slice(&self.null_bitmap);
-        }
-        let data_start = hoff;
-        let data_end = data_start + self.data.len();
-        target_buffer[data_start..data_end].copy_from_slice(&self.data);
-    }
-}
-
-
-pub struct HeapTupleView<'a> {
-    pub header: HeapTupleHeaderData,
-    pub raw: &'a [u8], // raw bytes of the entire tuple (header + null bitmap + data)
-}
-
-impl<'a> HeapTupleView<'a> {
-    pub fn new(raw_bytes: &'a [u8]) -> Self {
-        let (header, _) = 
-            HeapTupleHeaderData::read_from_prefix(raw_bytes)
-            .expect("Raw bytes are too small to contain a valid tuple header");
-        HeapTupleView { header, raw: raw_bytes }
-    }
-    pub fn header(&self) -> &HeapTupleHeaderData {
-        &self.header
-    }
-    /// Returns the raw data bytes of the tuple (excluding the header and null bitmap).
-    pub fn data(&self) -> &[u8] {
-        &self.raw[self.header.t_hoff as usize..]
-    }
-    pub fn null_bitmap(&self) -> Option<&[u8]> {
-        if !self.header.read_infomask().contains(TupleInfoMask::HEAP_HASNULL) {
-            return None;
-        }
-        let header_size = std::mem::size_of::<HeapTupleHeaderData>();
-        let hoff = self.header.t_hoff as usize;
-        if hoff > header_size {
-            Some(&self.raw[header_size..hoff])
-        } else {
-            None
-        }
-    }
-}
-
-
-
-
-
-

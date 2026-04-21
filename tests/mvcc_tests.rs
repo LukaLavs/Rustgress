@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::fs;
 use rustgress::storage::manager::StorageManager;
-use rustgress::access::heap::heap_access::HeapAccess;
+use rustgress::access::heap::access::HeapAccess;
 use rustgress::storage::buffer::manager::BufferPoolManager;
 use rustgress::access::transaction::manager::TransactionManager;
 use rustgress::catalog::manager::CatalogManager;
-use rustgress::catalog::schema::{Schema, Column};
+use rustgress::access::tuple::desc::{TupleDescriptor, Column};
 use rustgress::catalog::types::{DataType, Value};
 use rustgress::access::heap::scan::HeapScan;
 use rustgress::common::constants::*;
@@ -43,7 +43,7 @@ fn test_database_mvcc_full_cycle() {
 
     // --- 2. BASIC INSERT & SCAN TEST ---
     {
-        let schema = Schema::new(vec![Column { name: "id".to_string(), data_type: DataType::Integer }]);
+        let schema = TupleDescriptor::new(vec![Column { name: "id".to_string(), data_type: DataType::Integer }]);
         let xid = tm.begin();
         let table_oid = cm.create_table(xid, "table_basic", 0, &schema);
         
@@ -58,7 +58,7 @@ fn test_database_mvcc_full_cycle() {
 
     // --- 3. DIRTY READ PREVENTION TEST ---
     {
-        let schema = Schema::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
+        let schema = TupleDescriptor::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
         let xid_setup = tm.begin();
         let table_oid = cm.create_table(xid_setup, "table_dirty", 0, &schema);
         tm.commit(xid_setup);
@@ -78,7 +78,7 @@ fn test_database_mvcc_full_cycle() {
 
     // --- 4. SNAPSHOT ISOLATION TEST ---
     {
-        let schema = Schema::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
+        let schema = TupleDescriptor::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
         let xid_setup = tm.begin();
         let table_oid = cm.create_table(xid_setup, "table_snap", 0, &schema);
         tm.commit(xid_setup);
@@ -97,7 +97,7 @@ fn test_database_mvcc_full_cycle() {
 
     // --- 5. DELETE & VISIBILITY TEST ---
     {
-        let schema = Schema::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
+        let schema = TupleDescriptor::new(vec![Column { name: "val".to_string(), data_type: DataType::Integer }]);
         let xid_setup = tm.begin();
         let table_oid = cm.create_table(xid_setup, "table_del", 0, &schema);
         tm.commit(xid_setup);
@@ -124,7 +124,7 @@ fn test_database_mvcc_full_cycle() {
     // --- 6. CATALOG PERSISTENCE (CTID) TEST ---
     {
         let xid = tm.begin();
-        let table_oid = cm.create_table(xid, "table_ctid", 0, &Schema::new(vec![
+        let table_oid = cm.create_table(xid, "table_ctid", 0, &TupleDescriptor::new(vec![
             Column { name: "a".to_string(), data_type: DataType::Integer }
         ]));
         tm.commit(xid);

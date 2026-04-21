@@ -1,8 +1,7 @@
-use super::super::schema::{Schema, Column};
+use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
-use crate::access::tuple::header::Tuple;
+use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
-use crate::common::constants::{RG_NAMESPACE_OID};
 
 pub struct RGNamespace {
     pub oid: i32,             // unique table identifier
@@ -12,16 +11,15 @@ pub struct RGNamespace {
 }
 
 impl RGSomething for RGNamespace {
-    fn get_schema() -> Schema {
-        let schema = Schema::new(vec![
+    fn get_descriptor() -> TupleDescriptor {
+        TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
             Column { name: "nspname".to_string(), data_type: DataType::Varchar(64) },
             Column { name: "nspowner".to_string(), data_type: DataType::Integer },
             Column { name: "nspacl".to_string(), data_type: DataType::Integer },
-        ]);
-        schema
+        ])
     }
-    fn make_tuple(self, schema: &Schema) -> Tuple {
+    fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid as i32),
             Value::Varchar(self.nspname),
@@ -29,8 +27,8 @@ impl RGSomething for RGNamespace {
             Value::Integer(self.nspacl as i32),
         ])
     }
-    fn from_tuple(tuple: &Tuple) -> Self {
-        let schema = Self::get_schema();
+    fn from_tuple(tuple: &HeapTuple) -> Self {
+        let schema = Self::get_descriptor();
         let values = schema.unpack_from_tuple(tuple);
         
         Self {
@@ -40,5 +38,4 @@ impl RGSomething for RGNamespace {
             nspacl:   values[3].as_i32().unwrap(),
         }
     }
-    fn get_oid() -> u32 { RG_NAMESPACE_OID }
 }

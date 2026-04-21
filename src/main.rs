@@ -4,9 +4,9 @@ use rustgress::storage::buffer::manager::BufferPoolManager;
 use rustgress::storage::manager::StorageManager;
 use rustgress::access::transaction::manager::TransactionManager;
 use rustgress::catalog::manager::CatalogManager;
-use rustgress::catalog::schema::{Schema, Column};
+use rustgress::access::tuple::desc::{TupleDescriptor, Column};
 use rustgress::catalog::types::{DataType, Value};
-use rustgress::access::heap::heap_access::HeapAccess;
+use rustgress::access::heap::access::HeapAccess;
 use rustgress::access::heap::scan::HeapScan;
 
 
@@ -20,7 +20,7 @@ fn main() {
     cm.bootstrap_system_catalogs();
 
     // 2. Define a schema
-    let schema = Arc::new(Schema::new(vec![
+    let schema = Arc::new(TupleDescriptor::new(vec![
         Column { name: "user_id".to_string(), data_type: DataType::Integer },
         Column { name: "msg".to_string(), data_type: DataType::Varchar(100) },
     ]));

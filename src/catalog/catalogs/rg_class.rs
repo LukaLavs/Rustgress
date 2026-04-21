@@ -1,8 +1,7 @@
-use super::super::schema::{Schema, Column};
+use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
-use crate::access::tuple::header::Tuple;
+use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
-use crate::common::constants::{RG_CLASS_OID};
 
 pub struct RGClass {
     pub oid: i32,             // unique table identifier
@@ -16,8 +15,8 @@ pub struct RGClass {
 }
 
 impl RGSomething for RGClass {
-    fn get_schema() -> Schema {
-        let schema = Schema::new(vec![
+    fn get_descriptor() -> TupleDescriptor {
+        TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
             Column { name: "relname".to_string(), data_type: DataType::Varchar(64) },
             Column { name: "relnamespace".to_string(), data_type: DataType::Integer },
@@ -25,10 +24,9 @@ impl RGSomething for RGClass {
             Column { name: "reltuples".to_string(), data_type: DataType::Float },
             Column { name: "relspecial".to_string(), data_type: DataType::Integer },
             Column { name: "relnatts".to_string(), data_type: DataType::Integer }, 
-        ]);
-        schema
+        ])
     }
-    fn make_tuple(self, schema: &Schema) -> Tuple {
+    fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid),
             Value::Varchar(self.relname),
@@ -39,8 +37,8 @@ impl RGSomething for RGClass {
             Value::Integer(self.relnatts),
         ])
     }
-    fn from_tuple(tuple: &Tuple) -> Self {
-        let schema = Self::get_schema();
+    fn from_tuple(tuple: &HeapTuple) -> Self {
+        let schema = Self::get_descriptor();
         let values = schema.unpack_from_tuple(tuple);
         
         Self {
@@ -53,7 +51,6 @@ impl RGSomething for RGClass {
             relnatts: values[6].as_i32().unwrap(),
         }
     }
-    fn get_oid() -> u32 { RG_CLASS_OID }
 }
 
 
