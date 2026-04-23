@@ -3,3 +3,4 @@
 !tests/*
 target/
 data/
+data_test/

@@ -16,7 +16,7 @@ use rustgress::catalog::catalogs::traits::RGSomething;
 fn test_database_mvcc_full_cycle() {
     // --- 1. SETUP ---
     // Use a specific test directory to avoid any conflict with the main 'data' folder
-    let test_dir = "data_mvcc_test";
+    let test_dir = "data_test";
     
     if fs::metadata(test_dir).is_ok() {
         fs::remove_dir_all(test_dir).ok();
@@ -47,7 +47,7 @@ fn test_database_mvcc_full_cycle() {
         let xid = tm.begin();
         let table_oid = cm.create_table(xid, "table_basic", 0, &schema);
         
-        let mut tuple = schema.pack(vec![Value::Integer(42)]);
+        let mut tuple = schema.pack(vec![Value::Integer(42)], 0);
         HeapAccess::insert(sm.clone(), xid, table_oid, &mut tuple);
         tm.commit(xid);
 
@@ -64,7 +64,7 @@ fn test_database_mvcc_full_cycle() {
         tm.commit(xid_setup);
 
         let xid_a = tm.begin();
-        let mut tuple = schema.pack(vec![Value::Integer(100)]);
+        let mut tuple = schema.pack(vec![Value::Integer(100)], 0);
         HeapAccess::insert(sm.clone(), xid_a, table_oid, &mut tuple);
 
         let table = sm.get_table(table_oid);
@@ -88,7 +88,7 @@ fn test_database_mvcc_full_cycle() {
         let scan = HeapScan::new(bpm.clone(), table.clone(), tm.clone());
 
         let xid_write = tm.begin();
-        let mut tuple = schema.pack(vec![Value::Integer(200)]);
+        let mut tuple = schema.pack(vec![Value::Integer(200)], 0);
         HeapAccess::insert(sm.clone(), xid_write, table_oid, &mut tuple);
         tm.commit(xid_write);
 
@@ -103,7 +103,7 @@ fn test_database_mvcc_full_cycle() {
         tm.commit(xid_setup);
 
         let xid_1 = tm.begin();
-        let mut tuple = schema.pack(vec![Value::Integer(500)]);
+        let mut tuple = schema.pack(vec![Value::Integer(500)], 0);
         let rid = HeapAccess::insert(sm.clone(), xid_1, table_oid, &mut tuple);
         tm.commit(xid_1);
 

@@ -47,7 +47,7 @@ mod tests {
                     let mut tuple = schema_c.pack(vec![
                         Value::Integer(user_id as i32),
                         Value::Varchar(format!("Msg {} from user {}", i, user_id)),
-                    ]);
+                    ], 0);
                     HeapAccess::insert(sm_c.clone(), xid, msg_table_oid, &mut tuple);
                 }
                 tm_c.commit(xid);
@@ -82,7 +82,7 @@ mod tests {
         let null_oid = cm.create_table(xid_n, "null_table", 0, &schema_null);
         
         let row_nulls = vec![Value::Null, Value::Null];
-        let mut n_tuple = schema_null.pack(row_nulls.clone());
+        let mut n_tuple = schema_null.pack(row_nulls.clone(), 0);
         HeapAccess::insert(sm.clone(), xid_n, null_oid, &mut n_tuple);
         tm.commit(xid_n);
 
@@ -98,7 +98,7 @@ mod tests {
         let big_oid = cm.create_table(xid_b, "big_table", 0, &schema_big);
         
         for _ in 0..20 {
-            let mut b_tuple = schema_big.pack(vec![Value::Varchar("A".repeat(600))]);
+            let mut b_tuple = schema_big.pack(vec![Value::Varchar("A".repeat(600))], 0);
             HeapAccess::insert(sm.clone(), xid_b, big_oid, &mut b_tuple);
         }
         tm.commit(xid_b);

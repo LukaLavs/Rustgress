@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag};
 use crate::storage::disk::manager::Table;
 use crate::access::tuple::tuple::HeapTuple;
-use crate::common::types::RowId;
+use crate::common::types::{TransactionId, RowId};
 use crate::storage::manager::StorageManager;
 use crate::storage::buffer::manager::BufferFrame;
 use crate::storage::page::page::Page;
@@ -15,7 +15,7 @@ pub struct HeapAccess;
 impl HeapAccess {
     pub fn insert(
         storage: Arc<StorageManager>,
-        xid: u64,
+        xid: TransactionId,
         table_oid: u32,
         tuple: &mut HeapTuple,
     ) -> RowId {
@@ -87,7 +87,7 @@ impl HeapAccess {
 impl HeapAccess {    
     pub fn delete(
         storage: Arc<StorageManager>,
-        xid: u64,
+        xid: TransactionId,
         table_oid: u32,
         rid: RowId,
     ) -> bool {
@@ -113,7 +113,7 @@ impl HeapAccess {
 impl HeapAccess {
     pub fn update(
         storage: Arc<StorageManager>,
-        xid: u64,
+        xid: TransactionId,
         table_oid: u32,
         rid: RowId,
         new_tuple: &mut HeapTuple,

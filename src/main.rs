@@ -46,7 +46,7 @@ fn main() {
                 let mut tuple = schema_c.pack(vec![
                     Value::Integer(user_id as i32),
                     Value::Varchar(format!("Hello from user {}, msg #{}", user_id, i)),
-                ]);
+                ], 0);
                 HeapAccess::insert(sm_c.clone(), xid, msg_table_oid, &mut tuple);
             }
             tm_c.commit(xid);

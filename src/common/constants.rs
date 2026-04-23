@@ -28,4 +28,5 @@ pub const RG_TYPE_LEN_VARCHAR: i32 = -1;
 pub const RG_TYPE_LEN_NUMERIC: i32 = -1;
 
 
+pub const SYSTEM_XID: u32 = 0;
 pub const USER_XID_START: u32 = 10000;

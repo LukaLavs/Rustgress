@@ -67,4 +67,16 @@ impl HeapTupleHeaderData {
             slot_num: self.t_ctid_slot,
         }
     }
+    pub fn update_infomask(&mut self, to_add: TupleInfoMask, to_remove: TupleInfoMask) {
+        let mut mask = TupleInfoMask::from_bits_truncate(self.t_infomask);
+        mask.remove(to_remove);
+        mask.insert(to_add);
+        self.t_infomask = mask.bits();
+    }
+    pub fn update_infomask2(&mut self, to_add: TupleInfoMask2, to_remove: TupleInfoMask2) {
+        let mut mask = TupleInfoMask2::from_bits_truncate(self.t_infomask2);
+        mask.remove(to_remove);
+        mask.insert(to_add);
+        self.t_infomask2 = mask.bits();
+    }
 }

@@ -1,3 +1,4 @@
+use crate::common::types::{OffsetNumber};
 use zerocopy_derive::{IntoBytes, FromBytes, Immutable, KnownLayout};
 
 
@@ -34,6 +35,19 @@ impl ItemIdData {
     pub(crate) fn is_dead(&self) -> bool { self.lp_flags() == item_id_flags::LP_DEAD }
 }
 
+impl ItemIdData {
+    pub(crate) fn set_unused(&mut self) {
+        self.0 = 0; // LP_UNUSED (0) + off (0) + len (0)
+    }
+    pub(crate) fn set_dead(&mut self) {
+        self.set_lp_flags(item_id_flags::LP_DEAD);
+    }
+    pub(crate) fn set_redirect(&mut self, next_slot: OffsetNumber) {
+        self.set_lp_flags(item_id_flags::LP_REDIRECT);
+        self.set_lp_off(next_slot);
+        self.set_lp_len(0);
+    }
+}
 pub trait PageItem {
     fn len(&self) -> usize;
     fn serialize_into(&self, dest: &mut [u8]);

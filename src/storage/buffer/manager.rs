@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::storage::disk::manager::Table;
 use crate::storage::page::page::Page;
+use crate::storage::page::checksum::{PageChecksumExt};
 
 pub type BufferId = usize;
 
@@ -89,6 +90,9 @@ impl BufferPoolManager {
             let mut page_lock = frame.data.write().unwrap();
             let raw_data = table.read_page_raw(tag.page_idx);
             page_lock.data.copy_from_slice(&raw_data);
+            if !page_lock.checksum_verified() {
+                panic!("Data corruption detected on page {} of table {}!", tag.page_idx, tag.table_oid);
+            }
         }
         {
             let mut pins = frame.pin_count.lock().unwrap();
@@ -152,8 +156,9 @@ impl BufferPoolManager {
         if *dirty {
             let tag_lock = frame.tag.lock().unwrap();
             if let Some(tag) = *tag_lock {
-                let data_read = frame.data.read().unwrap();
-                table.write_page_raw(tag.page_idx, &data_read.data);
+                let mut data_write = frame.data.write().unwrap();
+                data_write.update_checksum(); // update checksum before writing
+                table.write_page_raw(tag.page_idx, &data_write.data);
                 *dirty = false;
                 println!("FLUSSHED.");
             }

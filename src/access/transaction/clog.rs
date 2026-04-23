@@ -2,6 +2,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
+use crate::common::types::TransactionId;
+
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// InProgress, Commited or Aborted.
@@ -30,7 +32,7 @@ impl CLog {
         Self { data, file_path: path.to_string(), }
     }
 
-    pub fn get_status(&self, xid: u64) -> XidStatus {
+    pub fn get_status(&self, xid: u32) -> XidStatus {
         if xid == 0 { return XidStatus::Committed; } // 0 is system transactions, always considered committed
         let byte_idx = (xid / 4) as usize;
         let bit_shift = (xid % 4) * 2;
@@ -46,7 +48,7 @@ impl CLog {
     }
 
     /// Set the status of a transaction (e.g., on COMMIT).
-    pub fn set_status(&mut self, xid: u64, status: XidStatus) {
+    pub fn set_status(&mut self, xid: TransactionId, status: XidStatus) {
         let byte_idx = (xid / 4) as usize;
         let bit_shift = (xid % 4) * 2;
         if byte_idx >= self.data.len() {

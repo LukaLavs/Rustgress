@@ -8,6 +8,7 @@ use crate::common::constants::{
     RG_ATTRIBUTE_OID, RG_CLASS_OID, RG_TYPE_OID, RG_NAMESPACE_OID,
     USER_XID_START
 };
+use crate::common::types::TransactionId;
 use crate::storage::disk::manager::Table;
 use crate::catalog::catalogs::traits::RGSomething;
 use crate::catalog::catalogs::{
@@ -66,7 +67,7 @@ impl CatalogManager {
         *lock += 1;
         oid
     }
-    pub fn create_table(&self, xid: u64, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
+    pub fn create_table(&self, xid: TransactionId, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
         let new_oid = self.generate_next_oid();
         Table::create(new_oid, special_size);
         {
@@ -115,7 +116,7 @@ impl CatalogManager {
 }
 
 impl CatalogManager {
-    pub fn drop_table(&self, xid: u64, table_name: &str) -> bool {
+    pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
         let table_oid = match self.get_table_oid(table_name) {
             Some(oid) => oid as u32,
             None => return false,
@@ -200,7 +201,7 @@ impl CatalogManager {
         println!("Bootstrap finalized.");
     }
 
-    fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor, xid: u64) {
+    fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor, xid: TransactionId) {
         let class_entries = [
             (RG_CLASS_OID, "rg_class", 7), // rg_class  has 7 columns
             (RG_ATTRIBUTE_OID, "rg_attribute", 5),
@@ -229,7 +230,7 @@ impl CatalogManager {
     fn bootstrap_rg_attribute(&self, 
         rg_attribute_schema: &TupleDescriptor, rg_class_schema: &TupleDescriptor, 
         rg_type_schema: &TupleDescriptor, rg_namespace_schema: &TupleDescriptor,
-        xid: u64) {
+        xid: TransactionId) {
         for (i, col) in rg_class_schema.columns.iter().enumerate() {
             let mut tuple = RGAttribute {
                 attrelid: RG_CLASS_OID as i32,
@@ -274,7 +275,7 @@ impl CatalogManager {
         }
     }
 
-    fn bootstrap_rg_type(&self, rg_type_schema: &TupleDescriptor, xid: u64) {
+    fn bootstrap_rg_type(&self, rg_type_schema: &TupleDescriptor, xid: TransactionId) {
         // Definiramo seznam vseh osnovnih tipov, ki jih sistem podpira
         let type_definitions = DataType::type_definitions();
         for (oid, name, len, byval) in type_definitions {
@@ -293,7 +294,7 @@ impl CatalogManager {
         }
     }
 
-    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &TupleDescriptor, xid: u64) {
+    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &TupleDescriptor, xid: TransactionId) {
         let mut tuple = RGNamespace {
             oid: RG_NAMESPACE_OID as i32,
             nspname: "public".to_string(),

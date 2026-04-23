@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::common::constants::RG_CLASS_OID;
+use crate::common::types::TransactionId;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag, BufferFrame};
 use crate::storage::disk::manager::Table;
 use crate::storage::page::page::Page;
@@ -18,7 +19,7 @@ pub struct HeapScan {
     current_page_idx: u32,       // page currently viewed by HeapScan
     current_slot_idx: u16,       // row number in currently viewed page
     active_frame: Option<Arc<BufferFrame>>, // current page pinned in RAM
-    visibility_cache: RefCell<HashMap<u64, bool>>, // cache of transaction visibility results to avoid repeated checks
+    visibility_cache: RefCell<HashMap<TransactionId, bool>>, // cache of transaction visibility results to avoid repeated checks
 }
 
 impl HeapScan {
@@ -36,7 +37,7 @@ impl HeapScan {
         }
     }
 
-    pub fn is_xid_visible(&self, xid: u64) -> bool {
+    pub fn is_xid_visible(&self, xid: TransactionId) -> bool {
         if xid == 0 { return true; } // system transactions are always visible
         {
             let cache = self.visibility_cache.borrow();
@@ -76,19 +77,14 @@ impl<'a> Iterator for HeapScan {
                 let slot = self.current_slot_idx;
                 self.current_slot_idx += 1;
                 if let Some(raw_tuple_bytes) = page.get_item(slot) {
-                    let view = HeapTupleView::new(raw_tuple_bytes);
+                    let mut view = HeapTupleView::new(raw_tuple_bytes);
                     let t_xmax = view.header.t_xmax;
-                    let is_deleted_and_visible = t_xmax != 0 && self.is_xid_visible(t_xmax as u64);
-                    let is_visible = !is_deleted_and_visible && self.is_xid_visible(view.header.t_xmin as u64);
+                    let is_deleted_and_visible = t_xmax != 0 && self.is_xid_visible(t_xmax as TransactionId);
+                    let is_visible = !is_deleted_and_visible && self.is_xid_visible(view.header.t_xmin as TransactionId);
                     if is_visible {
-                        let mut header = view.header;
-                        header.t_ctid_page = self.current_page_idx;
-                        header.t_ctid_slot = slot;
-                        return Some(HeapTuple {
-                            header: header,
-                            null_bitmap: view.null_bitmap().map(|b| b.to_vec()).unwrap_or_default(),
-                            data: view.data().to_vec(),
-                        });
+                        view.header.t_ctid_page = self.current_page_idx;
+                        view.header.t_ctid_slot = slot;
+                        return Some(view.to_tuple());
                     }
                 }
             }

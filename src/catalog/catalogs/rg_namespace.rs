@@ -2,6 +2,7 @@ use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
+use crate::common::constants::SYSTEM_XID;
 
 pub struct RGNamespace {
     pub oid: i32,             // unique table identifier
@@ -25,7 +26,7 @@ impl RGSomething for RGNamespace {
             Value::Varchar(self.nspname),
             Value::Integer(self.nspowner as i32),
             Value::Integer(self.nspacl as i32),
-        ])
+        ], SYSTEM_XID)
     }
     fn from_tuple(tuple: &HeapTuple) -> Self {
         let schema = Self::get_descriptor();

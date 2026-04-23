@@ -2,6 +2,7 @@ use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
+use crate::common::constants::SYSTEM_XID;
 
 pub struct RGType {
     pub oid: i32,           // unique type identifier
@@ -26,7 +27,7 @@ impl RGSomething for RGType {
             Value::Varchar(self.typname),
             Value::Integer(self.typlen as i32),
             Value::Boolean(self.typbyval),
-        ])
+        ], SYSTEM_XID)
     }
 
     fn from_tuple(tuple: &HeapTuple) -> Self {

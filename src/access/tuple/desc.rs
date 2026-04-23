@@ -1,6 +1,7 @@
 use crate::access::tuple::header::{TupleInfoMask, HeapTupleHeaderData};
 use crate::access::tuple::tuple::{HeapTupleView, HeapTuple};
 use crate::catalog::types::{DataType, Value};
+use crate::common::types::TransactionId;
 
 #[derive(Debug, Clone)] 
 pub struct Column { 
@@ -15,7 +16,7 @@ pub struct TupleDescriptor {
 impl TupleDescriptor {
     pub fn new(columns: Vec<Column>) -> Self { TupleDescriptor { columns } }
 
-    pub fn pack(&self, values: Vec<Value>) -> HeapTuple {
+    pub fn pack(&self, values: Vec<Value>, xmin: TransactionId) -> HeapTuple {
         let mut buffer = Vec::new();
         
         let bitmap_len = (self.columns.len() + 7) / 8; // alignment!
@@ -46,7 +47,7 @@ impl TupleDescriptor {
             mask.insert(TupleInfoMask::HEAP_HASNULL);
         }
         let header = HeapTupleHeaderData {
-            t_xmin: 101, // TODO: hardcoded, should be set by transaction manager
+            t_xmin: xmin,
             t_xmax: 0,
             t_ctid_page: 0,
             t_ctid_slot: 0,

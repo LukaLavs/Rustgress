@@ -2,6 +2,7 @@ use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
+use crate::common::constants::SYSTEM_XID;
 
 pub struct RGAttribute {
     pub attrelid: i32,        // table OID this column belongs to
@@ -29,7 +30,7 @@ impl RGSomething for RGAttribute {
             Value::Integer(self.atttypid as i32),
             Value::Integer(self.attnum as i32),
             Value::Integer(self.attlen as i32),
-        ])
+        ], SYSTEM_XID)
     }
     fn from_tuple(tuple: &HeapTuple) -> Self {
         let schema = Self::get_descriptor();

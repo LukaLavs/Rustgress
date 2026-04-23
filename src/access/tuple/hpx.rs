@@ -4,6 +4,7 @@ use crate::access::tuple::tuple::HeapTuple;
 use crate::common::types::{OffsetNumber, TransactionId, RowId};
 use crate::storage::page::header::PageHeaderData;
 use crate::storage::page::item::{ItemIdData};
+use super::header::{TupleInfoMask, TupleInfoMask2};
 
 
 // use crate::storage::page::page::{Page, PageItem};
@@ -17,6 +18,8 @@ pub trait HeapPageExt {
     fn heap_add_tuple(&mut self, tuple: &mut HeapTuple) -> Option<OffsetNumber>;
     fn heap_set_xmax(&mut self, slot_num: OffsetNumber, xid: TransactionId);
     fn heap_set_ctid(&mut self, slot_num: OffsetNumber, new_rid: RowId);
+    fn heap_update_infomask(&mut self, slot_num: OffsetNumber, to_add: TupleInfoMask, to_remove: TupleInfoMask);
+    fn heap_update_infomask2(&mut self, slot_num: OffsetNumber, to_add: TupleInfoMask2, to_remove: TupleInfoMask2);
 }
 
 impl HeapPageExt for Page {
@@ -34,6 +37,16 @@ impl HeapPageExt for Page {
         self.update_item_header::<HeapTupleHeaderData, _>(slot_num, |h| {
             h.t_ctid_page = new_rid.page_id;
             h.t_ctid_slot = new_rid.slot_num as u16;
+        })
+    }
+    fn heap_update_infomask(&mut self, slot_num: OffsetNumber, to_add: TupleInfoMask, to_remove: TupleInfoMask) {
+        self.update_item_header::<HeapTupleHeaderData, _>(slot_num, |h| {
+            h.update_infomask(to_add, to_remove);
+        })
+    }
+    fn heap_update_infomask2(&mut self, slot_num: OffsetNumber, to_add: TupleInfoMask2, to_remove: TupleInfoMask2) {
+        self.update_item_header::<HeapTupleHeaderData, _>(slot_num, |h| {
+            h.update_infomask2(to_add, to_remove);
         })
     }
 }
