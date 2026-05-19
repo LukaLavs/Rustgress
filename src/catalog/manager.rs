@@ -49,16 +49,16 @@ impl CatalogManager {
             let values = schema.unpack_from_tuple(&tuple);
             // in RGClass oid is first column (zero indexed)
             if let Some(oid_val) = values.get(0) {
-                println!("Inspecting OID from rg_class: {:?}", oid_val);
+                println!("CatalogManager: Inspecting OID from rg_class: {:?}", oid_val);
                 if let Some(oid) = oid_val.as_i32() {
-                    println!("Found existing OID in rg_class: {}", oid);
+                    println!("CatalogManager: Found existing OID in rg_class: {}", oid);
                     if oid as u32 >= max_oid {
                         max_oid = (oid as u32) + 1;
                     }
                 }
             }
         }
-        println!("Next available OID determined to be: {}", max_oid);
+        println!("CatalogManager: Next available OID determined to be: {}", max_oid);
         max_oid
     }
     fn generate_next_oid(&self) -> u32 {
@@ -162,13 +162,44 @@ impl CatalogManager {
             .collect();
         TupleDescriptor::new(columns)
     }
-    pub fn get_table_oid(&self, table_name: &str) -> Option<u32> {
+    pub fn get_table_oid_original(&self, table_name: &str) -> Option<u32> {
         let table_handle = self.storage.get_table(RG_CLASS_OID);
         let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone());
         scan
             .map(|tuple| RGClass::from_tuple(&tuple))
             .find(|class_entry| class_entry.relname == table_name)
             .map(|class_entry| class_entry.oid as u32)
+    }
+    pub fn get_table_oid(&self, table_name: &str) -> Option<u32> {
+        println!("[DEBUG get_table_oid] Začenjam iskanje OID za tabelo: '{}'", table_name);
+        
+        let table_handle = self.storage.get_table(RG_CLASS_OID);
+        let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone());
+        
+        let mut count = 0;
+        for tuple in scan {
+            count += 1;
+            let class_entry = RGClass::from_tuple(&tuple);
+            
+            println!(
+                "[DEBUG get_table_oid] Pregledujem vrstico #{}: relname='{}', oid={}", 
+                count, class_entry.relname, class_entry.oid
+            );
+            
+            if class_entry.relname == table_name {
+                println!(
+                    "[DEBUG get_table_oid] NAJDENO UJEMANJE! Tabela '{}' ima OID {}", 
+                    table_name, class_entry.oid
+                );
+                return Some(class_entry.oid as u32);
+            }
+        }
+        
+        println!(
+            "[DEBUG get_table_oid] Konec skeniranja. Pregledanih {} vrstic. Tabela '{}' NE OBSTAJA v katalogu.", 
+            count, table_name
+        );
+        None
     }
 }
 
@@ -183,6 +214,8 @@ impl CatalogManager {
         {
             Table::create(RG_CLASS_OID, 0);
             Table::create(RG_ATTRIBUTE_OID, 0);
+            Table::create(RG_TYPE_OID, 0);
+            Table::create(RG_NAMESPACE_OID, 0);
         }
         let xid = self.tm.begin();
 
@@ -198,6 +231,7 @@ impl CatalogManager {
         self.bootstrap_rg_namespace(&rg_namespace_schema, xid);
 
         self.tm.commit(xid);
+        self.tm.flush();
         println!("Bootstrap finalized.");
     }
 

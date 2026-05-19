@@ -8,6 +8,9 @@ use rustgress::access::tuple::desc::{TupleDescriptor, Column};
 use rustgress::catalog::types::{DataType, Value};
 use rustgress::access::heap::access::HeapAccess;
 use rustgress::access::heap::scan::HeapScan;
+// use rustgress::query::parser::parser::*;
+// use rustgress::query::executor::executor::ExecutionEngine; 
+// use rustgress::query::json::translator::WebTranslator;
 
 
 fn main() {
@@ -65,7 +68,7 @@ fn main() {
     
     let mut count = 0;
     for tuple in scan {
-        let data = schema.unpack_from_tuple(&tuple);
+        let _data = schema.unpack_from_tuple(&tuple);
         count += 1;
     }
     println!("Actual rows: {}", count);

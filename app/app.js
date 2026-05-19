@@ -1,6 +1,8 @@
 const http = require("http");
 
 const PORT = 3000;
+// Pot do tvojega delujočega Rust strežnika
+const RUST_BACKEND_URL = "http://127.0.0.1:8080";
 
 const html = `
 <!DOCTYPE html>
@@ -96,7 +98,7 @@ const html = `
             flex-direction: column;
             padding: 40px 60px;
             background: var(--editor-bg);
-            overflow: hidden; /* Glavni kontejner ne scrolla, scrollajo poddeli */
+            overflow: hidden;
         }
 
         .tabs-row { display: flex; align-items: center; gap: 24px; margin-bottom: 24px; flex-shrink: 0; }
@@ -112,7 +114,7 @@ const html = `
         #editor { width: 100%; min-height: 80px; max-height: 200px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.6; outline: none; color: var(--text); }
         .footer-hint { font-size: 10px; color: var(--text-dim); margin-top: 14px; display: flex; justify-content: space-between; text-transform: uppercase; letter-spacing: 0.5px; }
 
-        /* Result Area (PRO Tables) */
+        /* Result Area */
         .result-section { 
             flex: 1; 
             overflow: hidden; 
@@ -124,7 +126,7 @@ const html = `
         
         .table-viewport {
             flex: 1;
-            overflow: auto; /* Tu se zgodi magija za velike tabele */
+            overflow: auto;
             border-radius: 8px;
             background: var(--panel);
         }
@@ -152,7 +154,7 @@ const html = `
             font-size: 13px; 
             border-bottom: 1px solid var(--border); 
             color: var(--text); 
-            white-space: nowrap; /* Prepreči lomljenje pri 50 stolpcih */
+            white-space: nowrap;
             font-family: 'JetBrains Mono', monospace;
         }
 
@@ -210,7 +212,7 @@ const html = `
 <div id="toast" class="toast">Copied to clipboard</div>
 
 <script>
-    let tabs = [{query: "SELECT * FROM USERS", result: null}];
+    let tabs = [{query: "SELECT oid, relname FROM rg_class LIMIT 5", result: null}];
     let currentTabIdx = 0;
     let historyData = [];
 
@@ -275,6 +277,11 @@ const html = `
             });
             let data = await res.json();
             
+            if (data.status === "error") {
+                document.getElementById("result").innerHTML = \`<div style="padding:40px; color:red;">Baza javlja napako: \${data.message}</div>\`;
+                return;
+            }
+
             let tableHtml = renderTable(data);
             tabs[currentTabIdx].result = tableHtml;
             document.getElementById("result").innerHTML = tableHtml;
@@ -286,12 +293,27 @@ const html = `
     }
 
     function renderTable(data) {
-        if (!data.columns || data.columns.length === 0) return '<div style="padding:20px;">No data returned.</div>';
+        // POPRAVEK: Sinhronizacija s tvojim Rust WebTranslatorjem, ki podatke vrne v data.data in stolpce v data.columns
+        const columns = data.columns;
+        const rows = data.data; 
+
+        if (!columns || columns.length === 0 || !rows || rows.length === 0) {
+            return '<div style="padding:20px; color:var(--text-dim);">No data returned or empty table.</div>';
+        }
         
-        let html = "<table><thead><tr>" + data.columns.map(c => \`<th>\${c}</th>\`).join("") + "</tr></thead><tbody>";
-        data.rows.forEach(r => {
-            html += "<tr>" + r.map(cell => \`<td>\${cell}</td>\`).join("") + "</tr>";
+        let html = "<table><thead><tr>" + columns.map(c => \`<th>\${c}</th>\`).join("") + "</tr></thead><tbody>";
+        
+        rows.forEach(rowObject => {
+            html += "<tr>";
+            // Mapiramo objekt v celice glede na vrstni red stolpcev v shemi
+            columns.forEach(colName => {
+                let cellValue = rowObject[colName];
+                if (cellValue === null || cellValue === undefined) cellValue = "NULL";
+                html += \`<td>\${cellValue}</td>\`;
+            });
+            html += "</tr>";
         });
+        
         return html + "</tbody></table>";
     }
 
@@ -345,80 +367,55 @@ const html = `
 </html>
 `;
 
-// ===== FAKE DATABASE (DEMO) =====
-function fakeDB(query) {
-    const q = query.toUpperCase();
-    
-    if (q.includes("BIG")) {
-        const cols = Array.from({length: 50}, (_, i) => `COL_\${i + 1}`);
-        const rows = Array.from({length: 50}, (_, r) => 
-            Array.from({length: 50}, (_, c) => `DATA_\${r+1}:\${c+1}`)
-        );
-        return { columns: cols, rows: rows };
-    }
-
-    if (q.includes("USERS")) {
-        return { 
-            columns: [
-                "ID",
-                "USERNAME",
-                "ROLE",
-                "EMAIL",
-                "LAST_IP",
-                "CREATED_AT",
-                "LAST_LOGIN",
-                "STATUS",
-                "LOGIN_COUNT",
-                "ORG",
-                "PLAN",
-                "2FA_ENABLED"
-            ], 
-            rows: [
-                [1, "admin", "Owner", "admin@system.local", "127.0.0.1", "2024-01-01", "2026-04-21", "Online", 9999, "RootOrg", "Enterprise", true],
-                [2, "janez_rust", "Developer", "janez@rust.dev", "192.168.1.15", "2024-02-15", "2026-04-20", "Offline", 321, "DevTeam", "Pro", true],
-                [3, "eva_sql", "Analyst", "eva@data.ai", "10.0.0.5", "2024-03-10", "2026-04-22", "Online", 512, "Analytics", "Pro", true],
-                [4, "mario_db", "DBA", "mario@db.io", "10.1.1.2", "2024-04-01", "2026-04-18", "Online", 1200, "Infra", "Enterprise", true],
-                [5, "luka_dev", "Developer", "luka@code.rs", "172.16.0.9", "2024-04-10", "2026-04-19", "Offline", 88, "DevTeam", "Free", false],
-                [6, "tina_ui", "Designer", "tina@ui.design", "192.168.0.25", "2024-05-01", "2026-04-21", "Online", 230, "Design", "Pro", true],
-                [7, "marko_ops", "DevOps", "marko@ops.net", "10.0.0.8", "2024-05-15", "2026-04-22", "Online", 1500, "Infra", "Enterprise", true],
-                [8, "sara_ml", "Data Scientist", "sara@ai.ml", "10.2.3.4", "2024-06-01", "2026-04-20", "Offline", 640, "AI", "Pro", true],
-                [9, "filip_web", "Developer", "filip@web.dev", "192.168.1.44", "2024-06-10", "2026-04-17", "Online", 410, "DevTeam", "Free", false],
-                [10, "ana_sec", "Security", "ana@sec.io", "10.0.0.11", "2024-06-15", "2026-04-22", "Online", 980, "Security", "Enterprise", true],
-                [11, "jure_sql", "Analyst", "jure@sql.ai", "192.168.2.10", "2024-07-01", "2026-04-16", "Offline", 150, "Analytics", "Free", false],
-                [12, "petra_pm", "Manager", "petra@pm.org", "10.0.1.5", "2024-07-10", "2026-04-21", "Online", 670, "Management", "Pro", true],
-                [13, "igor_backend", "Developer", "igor@backend.rs", "172.16.1.20", "2024-07-20", "2026-04-22", "Online", 890, "DevTeam", "Pro", true],
-                [14, "nina_front", "Developer", "nina@frontend.dev", "192.168.1.60", "2024-08-01", "2026-04-19", "Offline", 300, "DevTeam", "Free", false],
-                [15, "klemen_db", "DBA", "klemen@db.rs", "10.0.2.2", "2024-08-10", "2026-04-18", "Online", 1100, "Infra", "Enterprise", true],
-                [16, "zala_data", "Analyst", "zala@data.org", "192.168.0.90", "2024-08-20", "2026-04-22", "Online", 520, "Analytics", "Pro", true],
-                [17, "rok_devops", "DevOps", "rok@ops.cloud", "10.1.0.7", "2024-09-01", "2026-04-21", "Online", 1300, "Infra", "Enterprise", true],
-                [18, "leon_ai", "ML Engineer", "leon@ai.net", "10.2.2.2", "2024-09-10", "2026-04-20", "Offline", 740, "AI", "Pro", true],
-                [19, "mija_support", "Support", "mija@support.io", "192.168.3.12", "2024-09-15", "2026-04-22", "Online", 250, "Support", "Free", false],
-                [20, "urban_sys", "SysAdmin", "urban@sys.local", "10.0.0.99", "2024-09-20", "2026-04-21", "Online", 2000, "Infra", "Enterprise", true]
-            ] 
-        };
-    }
-
-    return { 
-        columns: ["INFO", "STATUS", "VERSION"], 
-        rows: [["Query executed successfully", "OK", "RustgreSQL 0.1-alpha"]] 
-    };
-}
-
 const server = http.createServer((req, res) => {
     if (req.method === "GET") {
         res.writeHead(200, {"Content-Type": "text/html"});
         return res.end(html);
     }
+    
     if (req.method === "POST" && req.url === "/query") {
         let body = "";
         req.on("data", chunk => body += chunk);
         req.on("end", () => {
             try {
-                let { query } = JSON.parse(body || "{}");
-                res.writeHead(200, {"Content-Type": "application/json"});
-                res.end(JSON.stringify(fakeDB(query)));
+                let parsed = JSON.parse(body || "{}");
+                let sqlQuery = parsed.query.trim(); // Očistimo morebitne odvečne presledke
+
+                // Pretvorimo string v Buffer, da natančno izmerimo dolžino v bajtih
+                const payload = Buffer.from(sqlQuery, "utf-8");
+
+                // --- POPRAVLJEN BACKEND PROXY ---
+                const rustRequest = http.request(RUST_BACKEND_URL, {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "text/plain; charset=utf-8",
+                        // KLJUČNI POPRAVEK: Izklopimo chunked prenos in eksplicitno povemo dolžino
+                        "Content-Length": payload.length 
+                    }
+                }, (rustRes) => {
+                    let rustData = "";
+                    rustRes.on("data", chunk => rustData += chunk);
+                    rustRes.on("end", () => {
+                        res.writeHead(rustRes.statusCode, {"Content-Type": "application/json"});
+                        res.end(rustData);
+                    });
+                });
+
+                rustRequest.on("error", (err) => {
+                    res.writeHead(502, {"Content-Type": "application/json"});
+                    res.end(JSON.stringify({
+                        status: "error",
+                        message: "Rustgress backend na vratih 8080 ni dosegljiv."
+                    }));
+                });
+
+                // Pošljemo pripravljen payload
+                rustRequest.write(payload);
+                rustRequest.end();
+
             } catch (e) {
-                res.end(JSON.stringify({columns: ["Error"], rows: [["Invalid JSON request"]]}));
+                res.writeHead(400, {"Content-Type": "application/json"});
+                res.end(JSON.stringify({status: "error", message: "Napačna JSON zahteva"}));
             }
         });
         return;
@@ -426,7 +423,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-    console.log("\x1b[35m%s\x1b[0m", "🚀 RustgreSQL Pro Editor is live!");
-    console.log("\x1b[32m%s\x1b[0m", "   Day Mode: http://localhost:" + PORT);
-    console.log("\x1b[34m%s\x1b[0m", "   Try 'SELECT BIG' for 50x50 table test.");
+    console.log("\x1b[35m%s\x1b[0m", "🚀 RustgreSQL Pro Editor je povezan z Rustgress bazo!");
+    console.log("\x1b[32m%s\x1b[0m", "   Odpri v brskalniku: http://localhost:" + PORT);
 });

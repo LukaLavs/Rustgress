@@ -38,6 +38,7 @@ impl HeapScan {
     }
 
     pub fn is_xid_visible(&self, xid: TransactionId) -> bool {
+        return true; // TODO!!!!!!!!!!!!!
         if xid == 0 { return true; } // system transactions are always visible
         {
             let cache = self.visibility_cache.borrow();
@@ -131,6 +132,7 @@ impl HeapScan{
                 }
             }
         }
+        
         None // table not found
     }
 }
