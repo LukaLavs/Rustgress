@@ -38,15 +38,14 @@ impl HeapScan {
     }
 
     pub fn is_xid_visible(&self, xid: TransactionId) -> bool {
-        return true; // TODO!!!!!!!!!!!!!
         if xid == 0 { return true; } // system transactions are always visible
         {
             let cache = self.visibility_cache.borrow();
             if let Some(&visible) = cache.get(&xid) {
                 return visible;
-            }
+            } // check own cache first
         }
-        let visible = self.tm.is_visible(xid, &self.snapshot);
+        let visible = self.tm.is_visible(xid, &self.snapshot); // ask transaction manager
         self.visibility_cache.borrow_mut().insert(xid, visible);
         visible
     }

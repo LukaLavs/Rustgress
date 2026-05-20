@@ -64,30 +64,13 @@ impl TransactionManager {
     /// Check if a given XID is visible to a given snapshot.
     pub fn is_visible(&self, xid: TransactionId, snapshot: &Snapshot) -> bool {
         if xid == 0 { return true; } // system transactions are always visible
-        // let hint_status = match is_xmin {
-        //     true => {
-        //         if mask.contains(TupleInfoMask::HEAP_XMIN_COMMITTED) { Some(true) }
-        //         else if mask.contains(TupleInfoMask::HEAP_XMIN_INVALID) { Some(false) }
-        //         else { None }
-        //     },
-        //     false => {
-        //         if mask.contains(TupleInfoMask::HEAP_XMAX_COMMITTED) { Some(true) }
-        //         else if mask.contains(TupleInfoMask::HEAP_XMAX_INVALID) { Some(false) }
-        //         else { None }
-        //     }
-        // };
-        // if let Some(committed) = hint_status {
-        //     if !committed { return false; }
-        //     // Was it commited before the snapshot was taken?
-        //     return xid < snapshot.max_xid && !snapshot.active_at_start.contains(&xid);
-        // }
-        if xid >= snapshot.max_xid { return false; }
+ 
+        if xid >= snapshot.max_xid { return false; } // future transactions are not visible
         if snapshot.active_at_start.contains(&xid) {
-            return false;
+            return false; // transactions active at the start of the snapshot are not visible
         }
         let clog = self.clog.read().unwrap();
-        clog.get_status(xid) == XidStatus::Committed
-
+        clog.get_status(xid) == XidStatus::Committed // only committed transactions are visible
     }
 
     /// Creates current snapshot of the transaction state.

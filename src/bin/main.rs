@@ -99,5 +99,96 @@ fn main() {
 
     assert_eq!(count, 30, "Concurrency test failed: row count mismatch!");
 
-    bpm.flush_all(); 
+
+
+
+
+    // ==========================================================
+    // 7. VERBOZEN MVCC DROP TABLE TEST (Z obstoječimi metodami)
+    // ==========================================================
+    println!("\n==================================================");
+    println!("[MVCC BUG HUNT] Začenjam preverjanje DROP TABLE...");
+    println!("==================================================");
+
+    // --- KORAK A: Izvedba DROP TABLE ---
+    let drop_xid = tm.begin();
+    println!("[Korak A] Začeta DROP transakcija z XID: {}", drop_xid);
+    
+    let drop_success = cm.drop_table(drop_xid, table_name);
+    println!("[Korak A] cm.drop_table() izveden. Rezultat: {}", drop_success);
+    
+    // --- KORAK B: Commit drop transakcije ---
+    println!("[Korak B] Potrjujem (commit) DROP transakcijo (XID {})...", drop_xid);
+    tm.commit(drop_xid);
+
+    // --- KORAK C: Testiranje vidnosti preko CatalogManagera (Kot HTTP server) ---
+    println!("\n[Korak C] Simulacija NOVEGA HTTP zahtevka...");
+    
+    // Ker tvoj CatalogManager v get_schema ali iskanju interne sheme uporablja sistemske skane,
+    // bova takoj videla, ali se tabela še vedno uspešno naloži iz katalogov.
+    
+    println!("[Korak C] Kličem cm.get_schema({}) po izvedenem DROP-u...", msg_table_oid);
+    
+    // Uloviva trenutno stanje preko cm vmesnika
+    let post_drop_schema = cm.get_schema(msg_table_oid);
+    
+    println!("[Diagnostika] Število stolpcev vrnjenih iz katalogov: {}", post_drop_schema.columns.len());
+    
+    // --- KORAK D: Neposredni skan tabele (Če jo sm za nazaj sploh še najde) ---
+    println!("\n[Korak D] Preverjam neposredni nizkonivojski skan preko Storage Managera...");
+    let mut table_still_accessible = false;
+    let mut rows_found_after_drop = 0;
+
+    // Poskusimo dobiti ročico do tabele, da vidimo, če jo je StorageManager sploh odstranil
+    let table_handle = sm.get_table(msg_table_oid);
+    
+    // Zaženemo skan z povsem novo transakcijo, da vidimo, če se podatki še berejo
+    let check_xid = tm.begin();
+    let scan_after_drop = HeapScan::new(bpm.clone(), table_handle, tm.clone());
+    
+    for _tuple in scan_after_drop {
+        rows_found_after_drop += 1;
+        table_still_accessible = true;
+    }
+    tm.commit(check_xid);
+
+    println!("-> Najdenih vrstic v 'messages' datoteki po izbrisu: {}", rows_found_after_drop);
+
+    // ==========================================================
+    // KONČNA ANALIZA IN SKLEP
+    // ==========================================================
+    println!("\n==================================================");
+    println!("[ANALIZA REZULTATOV]");
+    println!("==================================================");
+    
+    if post_drop_schema.columns.len() > 0 {
+        println!("❌ NAPAKA ULOVLJENA: Tabela je ŠE VEDNO VIDNA v sistemskih katalogih!");
+        println!("   -> Čeprav je bil DROP potrjen, cm.get_schema še vedno najde definicijo tabele.");
+        println!("   -> Vzrok: HeapScan znotraj CatalogManagera ne upošteva t_xmax statusa v CLOG-u.");
+    } else {
+        println!("✅ KATALOGI SO ČISTI: CatalogManager ne vidi več sheme za to tabelo.");
+    }
+
+    if table_still_accessible && rows_found_after_drop > 0 {
+        println!("⚠️ OPOZORILO: Datoteka ali podatki na straneh so še vedno berljivi (Najdeno {} vrstic).", rows_found_after_drop);
+        println!("   -> To je pričakovano, če še nisi počistil datoteke iz diska, vendar");
+        println!("      sistemski katalogi (rg_class) je NE BI SMELI več kazati navzven.");
+    }
+    println!("==================================================");
+
+    bpm.flush_all();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }

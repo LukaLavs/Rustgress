@@ -190,3 +190,45 @@ impl BufferPoolManager {
         println!("FLUSSHED.")
     }
 }
+
+impl BufferPoolManager {
+    /// Popolnoma odstrani vse strani določene tabele iz pomnilnika (uporabno ob DROP TABLE).
+    pub fn evict_table_pages(&self, table_oid: u32) {
+        // 1. Najprej zaklenemo celotno tabelo strani za pisanje
+        let mut page_table = self.page_table.write().unwrap();
+        let mut free_list = self.free_list.lock().unwrap();
+
+        // Poiščemo vse tage, ki pripadajo tej tabeli
+        let tags_to_remove: Vec<BufferTag> = page_table
+            .keys()
+            .filter(|tag| tag.table_oid == table_oid)
+            .copied()
+            .collect();
+
+        for tag in tags_to_remove {
+            // Odstranimo iz HashMap-a in dobimo BufferId okvirja
+            if let Some(buf_id) = page_table.remove(&tag) {
+                let frame = &self.frames[buf_id];
+                
+                // Ponastavimo okvir, da bo čist in pripravljen za druge tabele
+                let mut tag_lock = frame.tag.lock().unwrap();
+                *tag_lock = None;
+
+                let mut dirty_lock = frame.is_dirty.lock().unwrap();
+                *dirty_lock = false; // Ker je tabela dropana, sprememb ne želimo pisati na disk!
+
+                let mut usage_lock = frame.usage_bit.lock().unwrap();
+                *usage_lock = false;
+                // Preverimo pin count za vsak slučaj (ob dropu bi moral biti 0, razen če nekdo ravno bere)
+                
+                let pins = frame.pin_count.lock().unwrap();
+                if *pins > 0 {
+                    println!("[WARNING] Dropping a table while pages are still pinned!");
+                }
+                // Okvir vrnemo na seznam prostih okvirjev
+                free_list.push(buf_id);
+            }
+        }
+        println!("[BPM] Vse strani za tabelo {} so bile uspešno izbrisane iz bufferja.", table_oid);
+    }
+}

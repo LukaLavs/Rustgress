@@ -3,7 +3,7 @@ use zerocopy::{IntoBytes, FromBytes};
 use super::header::{HeapTupleHeaderData, TupleInfoMask};
 use crate::storage::page::item::PageItem;
 
-
+#[derive(Debug, Clone)]
 pub struct HeapTuple {
     pub header: HeapTupleHeaderData,
     pub null_bitmap: Vec<u8>,

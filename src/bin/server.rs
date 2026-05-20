@@ -92,6 +92,7 @@ fn handle_connection(
                     let (rezultati, izhodna_shema) = engine.execute_statement(statement, xid);
                     
                     tm.commit(xid);
+                    bpm.flush_all(); 
 
                     // --- POPRAVEK: Nič več trdo kodiranega iskanja sheme iz CatalogManagerja! ---
                     // Translatorju pošljemo natančno tisto shemo, ki jo je sestavil ProjectionExecutor.

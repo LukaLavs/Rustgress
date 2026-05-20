@@ -25,6 +25,15 @@ pub enum SQLStatement {
         name: String,
         if_exists: bool,
     },
+    Delete {
+        table_name: String,
+        where_clause: Option<WhereClause>,
+    },
+    Update {
+        table_name: String,
+        assignments: Vec<(String, Expression)>,
+        where_clause: Option<WhereClause>,
+    },
     BeginTransaction,
     Commit,
     Rollback,
@@ -164,6 +173,8 @@ impl<'a> SQLParser<'a> {
         "select" => self.parse_select(),
         "insert" => self.parse_insert(),
         "drop" => self.parse_drop_table(),
+        "delete" => self.parse_delete(),
+        "update" => self.parse_update(),
         "begin" => {
             self.expect_keyword("transaction")?;
             Ok(SQLStatement::BeginTransaction)
@@ -570,23 +581,84 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
         Ok(keyword)
     }
 }
-pub fn parse_drop_table(&mut self) -> Result<SQLStatement, String> {
-    self.skip_whitespace();
-    self.expect_keyword("table")?;
-    
-    let if_exists = self.peek_keyword("if")?;
-    if if_exists {
-        self.parse_keyword()?; // IF
-        self.expect_keyword("exists")?;
+    pub fn parse_drop_table(&mut self) -> Result<SQLStatement, String> {
+        self.skip_whitespace();
+        self.expect_keyword("table")?;
+        
+        let if_exists = self.peek_keyword("if")?;
+        if if_exists {
+            self.parse_keyword()?; // IF
+            self.expect_keyword("exists")?;
+        }
+        
+        let table_name = self.parse_identifier()?;
+        
+        Ok(SQLStatement::DropTable {
+            name: table_name,
+            if_exists,
+        })
     }
-    
-    let table_name = self.parse_identifier()?;
-    
-    Ok(SQLStatement::DropTable {
-        name: table_name,
-        if_exists,
-    })
-}
+
+    pub fn parse_delete(&mut self) -> Result<SQLStatement, String> {
+        self.skip_whitespace();
+        self.expect_keyword("from")?;
+        let table_name = self.parse_identifier()?;
+        self.skip_whitespace();
+        let where_clause = if self.peek_keyword("where")? {
+            self.parse_keyword()?; // Požri besedo "WHERE"
+            Some(self.parse_where_clause()?)
+        } else {
+            None
+        };
+        Ok(SQLStatement::Delete {
+            table_name,
+            where_clause,
+        })
+    }
+
+    pub fn parse_update(&mut self) -> Result<SQLStatement, String> {
+        // Parsa: UPDATE table_name SET col1 = val1, col2 = val2 WHERE ...
+        let table_name = self.parse_identifier()?;
+
+        self.expect_keyword("set")?;
+
+        let mut assignments = Vec::new();
+
+        // Parsanje SET klavzule: col = expr, col2 = expr2
+        loop {
+            let col_name = self.parse_identifier()?;
+            self.expect_char('=')?;
+            
+            // Tukaj zaenkrat parsamo le literalne vrednosti kot izraz
+            // Če boš kasneje želel podporo za aritmetiko (starost = starost + 1),
+            // boš moral tukaj poklicati bolj splošen parse_expression()
+            let val = self.parse_sql_value()?;
+            assignments.push((col_name, Expression::Literal(val)));
+
+            self.skip_whitespace();
+            if self.peek_char(',') {
+                self.chars.next();
+                self.position += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Parsanje WHERE klavzule
+        let where_clause = if self.peek_keyword("where")? {
+            self.parse_keyword()?; // Požri "WHERE"
+            Some(self.parse_where_clause()?)
+        } else {
+            None
+        };
+
+        Ok(SQLStatement::Update {
+            table_name,
+            assignments,
+            where_clause,
+        })
+    }
+
     pub fn parse_identifier(&mut self) -> Result<String, String> {
         self.skip_whitespace();
 
@@ -663,20 +735,71 @@ pub fn parse_drop_table(&mut self) -> Result<SQLStatement, String> {
         Ok(constraints)
     }
 
+    // ======================= WHERE CLAUSE PARSER =======================
     pub fn parse_where_clause(&mut self) -> Result<WhereClause, String> {
-        let left = self.parse_identifier()?;
+        // Začnemo z najnižjo prioriteto (OR), ki bo rekurzivno poklicala višje nivoje
+        let condition = self.parse_or_expression()?;
+        Ok(WhereClause { condition })
+    }
 
-        self.expect_char('=')?;
+    // Parsa OR izraze (najnižja prioriteta, saj združuje AND bloke)
+    fn parse_or_expression(&mut self) -> Result<Expression, String> {
+        let mut expr = self.parse_and_expression()?;
 
-        let value = self.parse_sql_value()?;
+        loop {
+            self.skip_whitespace();
+            if self.peek_keyword("or")? {
+                self.parse_keyword()?; // Požri "OR"
+                let right = self.parse_and_expression()?;
+                expr = Expression::BinaryOp(
+                    Box::new(expr),
+                    BinaryOperator::Or,
+                    Box::new(right),
+                );
+            } else {
+                break;
+            }
+        }
 
-        Ok(WhereClause {
-            condition: Expression::ComparisonOp(
-                Box::new(Expression::Column(left)),
-                ComparisonOperator::Eq,
-                Box::new(Expression::Literal(value)),
-            ),
-        })
+        Ok(expr)
+    }
+
+    // Parsa AND izraze (višja prioriteta kot OR, združuje direktne primerjave)
+    fn parse_and_expression(&mut self) -> Result<Expression, String> {
+        let mut expr = self.parse_primary_comparison()?;
+
+        loop {
+            self.skip_whitespace();
+            if self.peek_keyword("and")? {
+                self.parse_keyword()?; // Požri "AND"
+                let right = self.parse_primary_comparison()?;
+                expr = Expression::BinaryOp(
+                    Box::new(expr),
+                    BinaryOperator::And,
+                    Box::new(right),
+                );
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    // Parsa osnovno primerjavo tipa: stolpec = vrednost
+    fn parse_primary_comparison(&mut self) -> Result<Expression, String> {
+        let left_ident = self.parse_identifier()?;
+        
+        self.skip_whitespace();
+        self.expect_char('=')?; // Zaenkrat podpirava samo enakost (=)
+        
+        let val = self.parse_sql_value()?;
+
+        Ok(Expression::ComparisonOp(
+            Box::new(Expression::Column(left_ident)),
+            ComparisonOperator::Eq,
+            Box::new(Expression::Literal(val)),
+        ))
     }
 }
 

@@ -18,6 +18,7 @@ use crate::catalog::catalogs::{
     rg_namespace::RGNamespace,
 };
 use crate::access::heap::scan::HeapScan;
+use crate::common::types::RowId;
 
 pub struct CatalogManager {
     pub storage: Arc<StorageManager>,
@@ -116,29 +117,63 @@ impl CatalogManager {
 }
 
 impl CatalogManager {
+    // pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
+    //     let table_oid = match self.get_table_oid(table_name) {
+    //         Some(oid) => oid as u32,
+    //         None => return false,
+    //     };
+    //     let bpm = self.storage.get_bpm();
+    //     // DELETE FROM rg_class
+    //     let class_table = self.storage.get_table(RG_CLASS_OID);
+    //     if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
+    //         .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
+    //     {
+    //         HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, tuple.header.get_rid());
+    //     }
+    //     // DELETE FROM rg_attribute
+    //     let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
+    //     HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
+    //         .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
+    //         .for_each(|t| {
+    //             HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, t.header.get_rid());
+    //         });
+    //     // REMOVE file from disk
+    //     let _ = std::fs::remove_file(format!("data/{}", table_oid));
+    //     bpm.flush_all();
+    //     bpm.evict_table_pages(table_oid);
+
+    //     true
+    // }
     pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
         let table_oid = match self.get_table_oid(table_name) {
             Some(oid) => oid as u32,
             None => return false,
         };
         let bpm = self.storage.get_bpm();
-        // DELETE FROM rg_class
         let class_table = self.storage.get_table(RG_CLASS_OID);
-        if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
-            .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
-        {
-            HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, tuple.header.get_rid());
+        let class_rid_to_delete = HeapScan::new(bpm.clone(), class_table.clone(), self.tm.clone())
+            .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid)
+            .map(|tuple| tuple.header.get_rid());
+        if let Some(rid) = class_rid_to_delete {
+            HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, rid);
         }
-        // DELETE FROM rg_attribute
         let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
-        HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
+        
+        // Iterator se tukaj zažene in POPOLNOMA zaključi, preden karkoli brišemo
+        let attr_rids_to_delete: Vec<RowId> = HeapScan::new(bpm.clone(), attr_table.clone(), self.tm.clone())
             .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
-            .for_each(|t| {
-                HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, t.header.get_rid());
-            });
-        // REMOVE file from disk
+            .map(|t| t.header.get_rid())
+            .collect(); // <--- KLJUČNO: collect() posesa vse v spomin in sprosti iterator!
+        // Šele ko je HeapScan popolnoma mrtev in zaprt, varno pobrišemo atribute
+        println!("DropFUNC: attr_rids_to_delete: {:?}", attr_rids_to_delete);
+        for rid in attr_rids_to_delete {
+            HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, rid);
+        }
+        bpm.flush_all(); // Vpiše posodobljena rg_class in rg_attribute na disk
         let _ = std::fs::remove_file(format!("data/{}", table_oid));
+        bpm.evict_table_pages(table_oid);
 
+        println!("DropFUNC:Tabela '{}', class_rid_to_delete: {:?}", table_name, class_rid_to_delete);
         true
     }
 }

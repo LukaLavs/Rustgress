@@ -80,6 +80,7 @@ impl Page { // Item managment methods.
     pub(crate) fn add_item<T: PageItem>(&mut self, item: &dyn PageItem) -> Option<OffsetNumber> {
         let item_id_size = std::mem::size_of::<ItemIdData>() as u16;
         let data_len = item.len() as u16;
+        let aligned_len = (data_len + 3) & !3; // must align to at least 4 bytes
         let needed_space = (data_len + item_id_size) as usize;
         if self.get_free_space() < needed_space {
             return None;
@@ -95,7 +96,7 @@ impl Page { // Item managment methods.
                 }
             }
         }
-        header.pd_upper -= data_len;
+        header.pd_upper -= aligned_len;
         let lp_off = header.pd_upper;
 
         let slot_num = if let Some(slot_idx) = target_slot {
@@ -135,19 +136,57 @@ impl Page { // Item managment methods.
     {
         let item_id = match self.get_item_id(slot_num) {
             Some(id) if id.lp_flags() == item_id_flags::LP_NORMAL => id,
-            _ => return,
+           
+            _ =>  {println!("[HEADER BUG] Stop 1: get_item_id za slot {} ni vrnil LP_NORMAL ali pa sploh ne obstaja!", slot_num);
+            return}
         };
         let offset = item_id.lp_off() as usize;
         let header_len = std::mem::size_of::<H>();
 
         if (item_id.lp_len() as usize) < header_len {
+            println!(
+                "[HEADER BUG] Stop 2: Dolžina elementa v slotu {} ({}) je MANJŠA od velikosti glave H ({})!", 
+                slot_num, item_id.lp_len(), header_len
+            );
             return;
         }
         if let Some(bytes) = self.data.get_mut(offset..offset + header_len) {
-            if let Ok(header_ref) = H::mut_from_bytes(bytes) {
-                f(header_ref);
-                return;
+            println!("HEADER BUG: bytges len {} za H, header zahteva {}, item_id pravi {}, slot {}!", bytes.len(), header_len, item_id.lp_len(), slot_num);
+            
+
+
+let ptr_address = bytes.as_ptr() as usize; 
+let mod_4 = ptr_address % 4;
+let mod_8 = ptr_address % 8;
+println!(
+    "[DEBUG ALIGNMENT] Slot: {}\n\
+        -> Velikost bytes slice-a: {} (H zahteva {})\n\
+        -> Surovi naslov v RAM-u: {}\n\
+        -> Deljivost s 4: {} (ostanek: {})\n\
+        -> Deljivost z 8: {} (ostanek: {})", 
+    slot_num, 
+    bytes.len(), 
+    header_len, 
+    ptr_address, 
+    mod_4 == 0, 
+    mod_4, 
+    mod_8 == 0, 
+    mod_8
+);
+            match H::mut_from_bytes(bytes) {
+                Ok(header_ref) => {
+                    f(header_ref);
+                    return;
+                }
+                Err(napaka) => {
+                    println!("[HEADER BUG] Stop 3b: mut_from_bytes je vrnil napako za H (velikost {}), napaka: {:?}!", header_len, napaka);
+                }
             }
+        } else {
+            println!(
+                "[HEADER BUG] Stop 3a: data.get_mut spodletel za razpon {}..{} (skupna velikost podatkov: {})!", 
+                offset, offset + header_len, self.data.len()
+            );
         }
     }
 }
