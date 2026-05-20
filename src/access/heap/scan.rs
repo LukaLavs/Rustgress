@@ -1,5 +1,4 @@
 use std::sync::{Arc, RwLock};
-use crate::common::constants::RG_CLASS_OID;
 use crate::common::types::TransactionId;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag, BufferFrame};
 use crate::storage::disk::manager::Table;
@@ -8,8 +7,6 @@ use crate::access::tuple::tuple::{HeapTuple, HeapTupleView};
 use super::super::transaction::manager::{TransactionManager, Snapshot};
 use std::collections::HashMap;
 use std::cell::RefCell;
-use crate::access::tuple::desc::TupleDescriptor;
-use crate::storage::manager::StorageManager;
 
 pub struct HeapScan {
     bpm: Arc<BufferPoolManager>, // pointer to buffer pool manager
@@ -39,6 +36,9 @@ impl HeapScan {
 
     pub fn is_xid_visible(&self, xid: TransactionId) -> bool {
         if xid == 0 { return true; } // system transactions are always visible
+        if xid == self.snapshot.max_xid {
+            return true; // own transactions are always visible
+        }
         {
             let cache = self.visibility_cache.borrow();
             if let Some(&visible) = cache.get(&xid) {
@@ -106,32 +106,5 @@ impl Drop for HeapScan {
         if let Some(frame) = &self.active_frame {
             self.bpm.unpin_page(frame.id);
         }
-    }
-}
-
-impl HeapScan{
-    pub fn get_table_oid(
-        storage: Arc<StorageManager>,
-        tm: Arc<TransactionManager>,
-        class_schema: &TupleDescriptor, 
-        target_table_name: &str
-    ) -> Option<i32> {
-        let rg_class_table = storage.get_table(RG_CLASS_OID);
-        let bpm = storage.get_bpm();
-        let scan = HeapScan::new(bpm, rg_class_table, tm);
-        for tuple in scan {
-            let values = class_schema.unpack_from_tuple(&tuple);
-            // oid is first column, relname is second column in rg_class
-            if let Some(name_value) = values.get(1) {
-                if name_value.as_str() == target_table_name {
-                    // if matches return oid (column 0)
-                    if let Some(oid_value) = values.get(0) {
-                        return oid_value.as_i32();
-                    }
-                }
-            }
-        }
-        
-        None // table not found
     }
 }

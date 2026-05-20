@@ -803,3 +803,23 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
     }
 }
 
+impl<'a> SQLParser<'a> {
+    pub fn parse_script(&mut self) -> Result<Vec<SQLStatement>, String> {
+        let mut statements = Vec::new();
+        while !self.is_eof() {
+            self.skip_whitespace();
+            if self.is_eof() { break; }
+            statements.push(self.parse_statement()?);
+            self.skip_whitespace();
+            if self.peek_char(';') {
+                self.chars.next(); // takes ';'
+                self.position += 1;
+            }
+        }
+        Ok(statements)
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.chars.clone().peek().is_none()
+    }
+}

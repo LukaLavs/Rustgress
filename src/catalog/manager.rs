@@ -117,34 +117,35 @@ impl CatalogManager {
 }
 
 impl CatalogManager {
-    // pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
-    //     let table_oid = match self.get_table_oid(table_name) {
-    //         Some(oid) => oid as u32,
-    //         None => return false,
-    //     };
-    //     let bpm = self.storage.get_bpm();
-    //     // DELETE FROM rg_class
-    //     let class_table = self.storage.get_table(RG_CLASS_OID);
-    //     if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
-    //         .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
-    //     {
-    //         HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, tuple.header.get_rid());
-    //     }
-    //     // DELETE FROM rg_attribute
-    //     let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
-    //     HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
-    //         .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
-    //         .for_each(|t| {
-    //             HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, t.header.get_rid());
-    //         });
-    //     // REMOVE file from disk
-    //     let _ = std::fs::remove_file(format!("data/{}", table_oid));
-    //     bpm.flush_all();
-    //     bpm.evict_table_pages(table_oid);
-
-    //     true
-    // }
     pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
+        let table_oid = match self.get_table_oid(table_name) {
+            Some(oid) => oid as u32,
+            None => return false,
+        };
+        let bpm = self.storage.get_bpm();
+        // DELETE FROM rg_class
+        let class_table = self.storage.get_table(RG_CLASS_OID);
+        if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
+            .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
+        {
+            HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, tuple.header.get_rid());
+        }
+        // DELETE FROM rg_attribute
+        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
+        HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
+            .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
+            .for_each(|t| {
+                HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, t.header.get_rid());
+            });
+        // REMOVE file from disk
+        let _ = std::fs::remove_file(format!("data/{}", table_oid));
+        bpm.flush_all();
+        bpm.evict_table_pages(table_oid);
+
+        true
+    }
+    
+    pub fn drop_table_old(&self, xid: TransactionId, table_name: &str) -> bool {
         let table_oid = match self.get_table_oid(table_name) {
             Some(oid) => oid as u32,
             None => return false,
@@ -197,7 +198,7 @@ impl CatalogManager {
             .collect();
         TupleDescriptor::new(columns)
     }
-    pub fn get_table_oid_original(&self, table_name: &str) -> Option<u32> {
+    pub fn get_table_oid(&self, table_name: &str) -> Option<u32> { // TODO: check if it is safe to replace with get_table_oid
         let table_handle = self.storage.get_table(RG_CLASS_OID);
         let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone());
         scan
@@ -205,44 +206,13 @@ impl CatalogManager {
             .find(|class_entry| class_entry.relname == table_name)
             .map(|class_entry| class_entry.oid as u32)
     }
-    pub fn get_table_oid(&self, table_name: &str) -> Option<u32> {
-        println!("[DEBUG get_table_oid] Začenjam iskanje OID za tabelo: '{}'", table_name);
-        
-        let table_handle = self.storage.get_table(RG_CLASS_OID);
-        let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone());
-        
-        let mut count = 0;
-        for tuple in scan {
-            count += 1;
-            let class_entry = RGClass::from_tuple(&tuple);
-            
-            println!(
-                "[DEBUG get_table_oid] Pregledujem vrstico #{}: relname='{}', oid={}", 
-                count, class_entry.relname, class_entry.oid
-            );
-            
-            if class_entry.relname == table_name {
-                println!(
-                    "[DEBUG get_table_oid] NAJDENO UJEMANJE! Tabela '{}' ima OID {}", 
-                    table_name, class_entry.oid
-                );
-                return Some(class_entry.oid as u32);
-            }
-        }
-        
-        println!(
-            "[DEBUG get_table_oid] Konec skeniranja. Pregledanih {} vrstic. Tabela '{}' NE OBSTAJA v katalogu.", 
-            count, table_name
-        );
-        None
-    }
 }
 
 impl CatalogManager {
-    pub fn bootstrap_system_catalogs(&self) {
+    pub fn bootstrap_system_catalogs(&self) -> bool {
         if std::path::Path::new(&format!("data/{}", RG_CLASS_OID)).exists() {
             println!("Sistem catalogs exist, skipping bootstrap.");
-            return;
+            return false;
         }
         println!("Starting bootstrap of system catalogs...");
         std::fs::create_dir_all("data").expect("Folder data could not be created!");
@@ -268,6 +238,7 @@ impl CatalogManager {
         self.tm.commit(xid);
         self.tm.flush();
         println!("Bootstrap finalized.");
+        return true;
     }
 
     fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor, xid: TransactionId) {

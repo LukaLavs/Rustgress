@@ -8,7 +8,6 @@ use rustgress::storage::buffer::manager::BufferPoolManager;
 use rustgress::storage::manager::StorageManager;
 use rustgress::access::transaction::manager::TransactionManager;
 use rustgress::catalog::manager::CatalogManager;
-use rustgress::catalog::types::{Value};
 use rustgress::query::parser::parser::*;
 use rustgress::query::executor::executor::ExecutionEngine; 
 use rustgress::query::json::translator::WebTranslator;
@@ -23,7 +22,11 @@ fn main() {
     let cm = Arc::new(CatalogManager::new(sm.clone(), tm.clone()));
     
     // Naložimo sistemske kataloge ali jih inicializiramo
-    cm.bootstrap_system_catalogs();
+    let completed = cm.bootstrap_system_catalogs();
+    if completed { // system catalogs were created for the first time
+        let engine = ExecutionEngine::new(bpm.clone(), sm.clone(), tm.clone(), cm.clone());
+        run_bootstrap_scripts(&engine, "src/utils/rgsql_scripts/bootstrap");
+    };
     println!("[Server] Sistemski katalogi so pripravljeni.");
 
     // 2. Zaženemo TCP Listener na vratih 8080
@@ -89,7 +92,15 @@ fn handle_connection(
                     let xid = tm.begin();
                     
                     // --- POPRAVEK: Lovimo tako rezultate kot dinamično shemo iz executorja ---
-                    let (rezultati, izhodna_shema) = engine.execute_statement(statement, xid);
+                    let (rezultati, izhodna_shema) = 
+                        match engine.execute_statement(statement, xid) {
+                            Ok((res, shema)) => (res, shema),
+                            Err(e) => {
+                                tm.abort(xid);
+                                send_http_error(&mut stream, &format!("Execution Error: {}", e));
+                                return;
+                            }
+                        };
                     
                     tm.commit(xid);
                     bpm.flush_all(); 
@@ -146,3 +157,75 @@ fn send_http_error(stream: &mut TcpStream, error_msg: &str) {
     );
     let _ = stream.write_all(response.as_bytes());
 }
+
+/// Additional scripts for inicialization.
+fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
+    use std::fs;
+    let path = std::path::Path::new(folder_path);
+    if !path.is_dir() { return; }
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
+                let code = fs::read_to_string(&path).unwrap();
+                let mut parser = SQLParser::new(&code);
+                match parser.parse_script() {
+                    Ok(statements) => {
+                        for statement in statements {
+                            let xid = engine.tm.begin();
+                            match engine.execute_statement(statement, xid) {
+                                Ok(_) => {
+                                    // 3. Commit
+                                    engine.tm.commit(xid);
+                                },
+                                Err(e) => {
+                                    // 4. Abort ob napaki
+                                    engine.tm.abort(xid);
+                                    eprintln!("[Bootstrap] Napaka pri ukazu v {}: {}", path.display(), e);
+                                    break;
+                                }
+                            }
+                        }
+                        println!("[Bootstrap] USPEH ({})", path.display());
+                    }
+                    Err(e) => eprintln!("[Bootstrap] Parser error v {}: {}", path.display(), e),
+                }
+            }
+        }
+    }
+}
+
+
+
+// --- THIS VERSION BELOW IS better, but currently heap scan doesn't know its own transaction id, and 
+//     it can not see changes made in its transaction. We shouldn't just add xid to heap scan as it is wasteful,
+//     perhaps we should somehow get it to snapshot.
+
+// fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
+//     use std::fs;
+//     let path = std::path::Path::new(folder_path);
+//     if !path.is_dir() { return; }
+
+//     if let Ok(entries) = fs::read_dir(path) {
+//         for entry in entries.flatten() {
+//             let path = entry.path();
+//             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
+//                 let code = fs::read_to_string(&path).unwrap();
+                
+//                 // --- TU JE SPREMEMBA: Vsaka datoteka je ena transakcija ---
+//                 let xid = engine.tm.begin(); 
+                
+//                 match engine.run_script_in_transaction(&code, xid) {
+//                     Ok(_) => {
+//                         engine.tm.commit(xid);
+//                         println!("[Bootstrap] USPEH ({})", path.display());
+//                     },
+//                     Err(err) => {
+//                         engine.tm.abort(xid);
+//                         eprintln!("[Bootstrap] NAPAKA ({}): {}", path.display(), err);
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
