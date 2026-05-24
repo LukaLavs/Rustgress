@@ -806,74 +806,108 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
         Ok(expr)
     }
 
+    // 1. Parsa seštevanje in odštevanje (+, -)
+    fn parse_additive_expression(&mut self) -> Result<Expression, String> {
+        let mut expr = self.parse_multiplicative_expression()?;
+
+        loop {
+            self.skip_whitespace();
+            if self.peek_char('+') {
+                self.chars.next(); self.position += 1;
+                let right = self.parse_multiplicative_expression()?;
+                expr = Expression::BinaryOp(Box::new(expr), BinaryOperator::Add, Box::new(right));
+            } else if self.peek_char('-') {
+                self.chars.next(); self.position += 1;
+                let right = self.parse_multiplicative_expression()?;
+                expr = Expression::BinaryOp(Box::new(expr), BinaryOperator::Sub, Box::new(right));
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    // 2. Parsa množenje in deljenje (*, /)
+    fn parse_multiplicative_expression(&mut self) -> Result<Expression, String> {
+        let mut expr = self.parse_primary_expression()?;
+
+        loop {
+            self.skip_whitespace();
+            if self.peek_char('*') {
+                self.chars.next(); self.position += 1;
+                let right = self.parse_primary_expression()?;
+                expr = Expression::BinaryOp(Box::new(expr), BinaryOperator::Mul, Box::new(right));
+            } else if self.peek_char('/') {
+                self.chars.next(); self.position += 1;
+                let right = self.parse_primary_expression()?;
+                expr = Expression::BinaryOp(Box::new(expr), BinaryOperator::Div, Box::new(right));
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    // 3. Parsa atomarne elemente: Stolpec ali Literal
+    fn parse_primary_expression(&mut self) -> Result<Expression, String> {
+        self.skip_whitespace();
+        
+        if let Some(&c) = self.chars.peek() {
+            if c.is_alphabetic() {
+                let ident = self.parse_keyword()?;
+                match ident.to_lowercase().as_str() {
+                    "true" => Ok(Expression::Literal(SQLValue::Boolean(true))),
+                    "false" => Ok(Expression::Literal(SQLValue::Boolean(false))),
+                    "null" => Ok(Expression::Literal(SQLValue::Null)),
+                    _ => Ok(Expression::Column(ident)),
+                }
+            } else {
+                let val = self.parse_sql_value()?;
+                Ok(Expression::Literal(val))
+            }
+        } else {
+            Err("Expected expression, found EOF".to_string())
+        }
+    }
+
     // Parsa osnovno primerjavo tipa: stolpec < operator > vrednost
     fn parse_primary_comparison(&mut self) -> Result<Expression, String> {
-        let left_ident = self.parse_identifier()?;
+        // Leva stran je lahko celoten matematični izraz (npr. population * 2)
+        let left_expr = self.parse_additive_expression()?;
         
         self.skip_whitespace();
         
-        // 1. Preberemo operator (lahko je eno- ali dvo-znakovni)
+        // Preberemo primerjalni operator
         let op = match self.chars.peek() {
-            Some(&'=') => {
-                self.chars.next(); self.position += 1;
-                ComparisonOperator::Eq
-            }
+            Some(&'=') => { self.chars.next(); self.position += 1; ComparisonOperator::Eq }
             Some(&'!') => {
                 self.chars.next(); self.position += 1;
-                self.expect_char('=')?; // pričakujemo '=' za '!='
-                ComparisonOperator::Ne
+                self.expect_char('=')?; ComparisonOperator::Ne
             }
             Some(&'<') => {
                 self.chars.next(); self.position += 1;
-                if self.peek_char('=') {
-                    self.chars.next(); self.position += 1;
-                    ComparisonOperator::Lte // <=
-                } else if self.peek_char('>') {
-                    self.chars.next(); self.position += 1;
-                    ComparisonOperator::Ne  // <> je star SQL standard za !=
-                } else {
-                    ComparisonOperator::Lt  // <
-                }
+                if self.peek_char('=') { self.chars.next(); self.position += 1; ComparisonOperator::Lte }
+                else if self.peek_char('>') { self.chars.next(); self.position += 1; ComparisonOperator::Ne }
+                else { ComparisonOperator::Lt }
             }
             Some(&'>') => {
                 self.chars.next(); self.position += 1;
-                if self.peek_char('=') {
-                    self.chars.next(); self.position += 1;
-                    ComparisonOperator::Gte // >=
-                } else {
-                    ComparisonOperator::Gt  // >
-                }
+                if self.peek_char('=') { self.chars.next(); self.position += 1; ComparisonOperator::Gte }
+                else { ComparisonOperator::Gt }
             }
-            Some(c) => return Err(format!("Expected comparison operator (=, !=, <, >, <=, >=), found '{}'", c)),
+            Some(c) => return Err(format!("Expected comparison operator, found '{}'", c)),
             None => return Err("Expected comparison operator, found EOF".to_string()),
         };
         
         self.skip_whitespace();
-        // --- POPRAVEK ZA DESNO STRAN ---
-        // Poglejmo naslednji znak. Če je črka, gre verjetno za drug STOLPEC!
-        let right_expr = if let Some(&c) = self.chars.peek() {
-            if c.is_alphabetic() {
-                let right_keyword = self.parse_keyword()?;
-                // Izjema: Če je beseda TRUE, FALSE ali NULL, je to še vedno Literal
-                match right_keyword.to_lowercase().as_str() {
-                    "true" => Expression::Literal(SQLValue::Boolean(true)),
-                    "false" => Expression::Literal(SQLValue::Boolean(false)),
-                    "null" => Expression::Literal(SQLValue::Null),
-                    _ => Expression::Column(right_keyword), // V vseh ostalih primerih je to STOLPEC!
-                }
-            } else {
-                // Če ni črka (ampak npr. številka ali narekovaj), preberemo klasiko
-                let val = self.parse_sql_value()?;
-                Expression::Literal(val)
-            }
-        } else {
-            return Err("Expected value or column on the right side of comparison".to_string());
-        };
+        
+        // Desna stran je prav tako lahko matematični izraz (npr. income / 2)
+        let right_expr = self.parse_additive_expression()?;
 
         Ok(Expression::ComparisonOp(
-            Box::new(Expression::Column(left_ident)),
+            Box::new(left_expr),
             op,
-            Box::new(right_expr), // Sedaj je lahko Column ali Literal!
+            Box::new(right_expr),
         ))
     }
 }
