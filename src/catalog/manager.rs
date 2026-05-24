@@ -8,7 +8,6 @@ use crate::common::constants::{
     RG_ATTRIBUTE_OID, RG_CLASS_OID, RG_TYPE_OID, RG_NAMESPACE_OID,
     USER_XID_START
 };
-use crate::common::types::TransactionId;
 use crate::storage::disk::manager::Table;
 use crate::catalog::catalogs::traits::RGSomething;
 use crate::catalog::catalogs::{
@@ -19,6 +18,7 @@ use crate::catalog::catalogs::{
 };
 use crate::access::heap::scan::HeapScan;
 use crate::common::types::RowId;
+use crate::access::transaction::context::{get_current_xid, set_current_xid, clear_current_xid};
 
 pub struct CatalogManager {
     pub storage: Arc<StorageManager>,
@@ -68,7 +68,10 @@ impl CatalogManager {
         *lock += 1;
         oid
     }
-    pub fn create_table(&self, xid: TransactionId, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
+    /// returns new oid
+    pub fn create_table(&self, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
+        let xid = get_current_xid();
+        assert!(xid != 0, "No active transaction found in context for create_table operation");
         let new_oid = self.generate_next_oid();
         Table::create(new_oid, special_size);
         {
@@ -90,7 +93,6 @@ impl CatalogManager {
         }.make_tuple(&rg_class_schema);
         HeapAccess::insert(
             self.storage.clone(),
-            xid,
             RG_CLASS_OID,
             &mut class_tuple
         );
@@ -106,7 +108,6 @@ impl CatalogManager {
             }.make_tuple(&rg_attribute_schema);
             HeapAccess::insert(
                 self.storage.clone(),
-                xid,
                 RG_ATTRIBUTE_OID,
                 &mut attr_tuple
             );
@@ -117,7 +118,7 @@ impl CatalogManager {
 }
 
 impl CatalogManager {
-    pub fn drop_table(&self, xid: TransactionId, table_name: &str) -> bool {
+    pub fn drop_table(&self, table_name: &str) -> bool {
         let table_oid = match self.get_table_oid(table_name) {
             Some(oid) => oid as u32,
             None => return false,
@@ -128,14 +129,14 @@ impl CatalogManager {
         if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
             .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
         {
-            HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, tuple.header.get_rid());
+            HeapAccess::delete(self.storage.clone(), RG_CLASS_OID, tuple.header.get_rid());
         }
         // DELETE FROM rg_attribute
         let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
         HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
             .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
             .for_each(|t| {
-                HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, t.header.get_rid());
+                HeapAccess::delete(self.storage.clone(), RG_ATTRIBUTE_OID, t.header.get_rid());
             });
         // REMOVE file from disk
         let _ = std::fs::remove_file(format!("data/{}", table_oid));
@@ -145,7 +146,7 @@ impl CatalogManager {
         true
     }
     
-    pub fn drop_table_old(&self, xid: TransactionId, table_name: &str) -> bool {
+    pub fn drop_table_old(&self, table_name: &str) -> bool {
         let table_oid = match self.get_table_oid(table_name) {
             Some(oid) => oid as u32,
             None => return false,
@@ -156,7 +157,7 @@ impl CatalogManager {
             .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid)
             .map(|tuple| tuple.header.get_rid());
         if let Some(rid) = class_rid_to_delete {
-            HeapAccess::delete(self.storage.clone(), xid, RG_CLASS_OID, rid);
+            HeapAccess::delete(self.storage.clone(),  RG_CLASS_OID, rid);
         }
         let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
         
@@ -168,7 +169,7 @@ impl CatalogManager {
         // Šele ko je HeapScan popolnoma mrtev in zaprt, varno pobrišemo atribute
         println!("DropFUNC: attr_rids_to_delete: {:?}", attr_rids_to_delete);
         for rid in attr_rids_to_delete {
-            HeapAccess::delete(self.storage.clone(), xid, RG_ATTRIBUTE_OID, rid);
+            HeapAccess::delete(self.storage.clone(), RG_ATTRIBUTE_OID, rid);
         }
         bpm.flush_all(); // Vpiše posodobljena rg_class in rg_attribute na disk
         let _ = std::fs::remove_file(format!("data/{}", table_oid));
@@ -223,25 +224,27 @@ impl CatalogManager {
             Table::create(RG_NAMESPACE_OID, 0);
         }
         let xid = self.tm.begin();
+        set_current_xid(xid);
 
         let rg_class_schema = RGClass::get_descriptor();
         let rg_attribute_schema = RGAttribute::get_descriptor();
         let rg_type_schema = RGType::get_descriptor();
         let rg_namespace_schema = RGNamespace::get_descriptor();
 
-        self.bootstrap_rg_class(&rg_class_schema, xid);
+        self.bootstrap_rg_class(&rg_class_schema);
         self.bootstrap_rg_attribute(&rg_attribute_schema, &rg_class_schema, 
-            &rg_type_schema, &rg_namespace_schema, xid);
-        self.bootstrap_rg_type(&rg_type_schema, xid);
-        self.bootstrap_rg_namespace(&rg_namespace_schema, xid);
+            &rg_type_schema, &rg_namespace_schema);
+        self.bootstrap_rg_type(&rg_type_schema);
+        self.bootstrap_rg_namespace(&rg_namespace_schema);
 
         self.tm.commit(xid);
+        clear_current_xid();
         self.tm.flush();
         println!("Bootstrap finalized.");
         return true;
     }
 
-    fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor, xid: TransactionId) {
+    fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor) {
         let class_entries = [
             (RG_CLASS_OID, "rg_class", 7), // rg_class  has 7 columns
             (RG_ATTRIBUTE_OID, "rg_attribute", 5),
@@ -259,8 +262,7 @@ impl CatalogManager {
                 relnatts: natts,
             }.make_tuple(rg_class_schema);
             HeapAccess::insert(
-                self.storage.clone(), 
-                xid, 
+                self.storage.clone(),
                 RG_CLASS_OID, 
                 &mut tuple
             );
@@ -269,8 +271,7 @@ impl CatalogManager {
 
     fn bootstrap_rg_attribute(&self, 
         rg_attribute_schema: &TupleDescriptor, rg_class_schema: &TupleDescriptor, 
-        rg_type_schema: &TupleDescriptor, rg_namespace_schema: &TupleDescriptor,
-        xid: TransactionId) {
+        rg_type_schema: &TupleDescriptor, rg_namespace_schema: &TupleDescriptor) {
         for (i, col) in rg_class_schema.columns.iter().enumerate() {
             let mut tuple = RGAttribute {
                 attrelid: RG_CLASS_OID as i32,
@@ -279,7 +280,7 @@ impl CatalogManager {
                 attnum: (i + 1) as i32, // 1-based
                 attlen: col.data_type.get_byte_len(),
             }.make_tuple(&rg_attribute_schema);
-            HeapAccess::insert(self.storage.clone(), xid, RG_ATTRIBUTE_OID, &mut tuple);
+            HeapAccess::insert(self.storage.clone(), RG_ATTRIBUTE_OID, &mut tuple);
         }
         for (i, col) in rg_attribute_schema.columns.iter().enumerate() {
             let mut tuple = RGAttribute {
@@ -289,7 +290,7 @@ impl CatalogManager {
                 attnum: (i + 1) as i32, // 1-based
                 attlen: col.data_type.get_byte_len(),
             }.make_tuple(&rg_attribute_schema);
-            HeapAccess::insert(self.storage.clone(), xid, RG_ATTRIBUTE_OID, &mut tuple);
+            HeapAccess::insert(self.storage.clone(), RG_ATTRIBUTE_OID, &mut tuple);
         }
 
         for (i, col) in rg_type_schema.columns.iter().enumerate() {
@@ -300,7 +301,7 @@ impl CatalogManager {
                 attnum: (i + 1) as i32, // 1-based
                 attlen: col.data_type.get_byte_len(),
             }.make_tuple(&rg_attribute_schema);
-            HeapAccess::insert(self.storage.clone(), xid, RG_ATTRIBUTE_OID, &mut tuple);
+            HeapAccess::insert(self.storage.clone(), RG_ATTRIBUTE_OID, &mut tuple);
         }
 
         for (i, col) in rg_namespace_schema.columns.iter().enumerate() {
@@ -311,11 +312,11 @@ impl CatalogManager {
                 attnum: (i + 1) as i32, // 1-based
                 attlen: col.data_type.get_byte_len(),
             }.make_tuple(&rg_attribute_schema);
-            HeapAccess::insert(self.storage.clone(), xid, RG_ATTRIBUTE_OID, &mut tuple);
+            HeapAccess::insert(self.storage.clone(), RG_ATTRIBUTE_OID, &mut tuple);
         }
     }
 
-    fn bootstrap_rg_type(&self, rg_type_schema: &TupleDescriptor, xid: TransactionId) {
+    fn bootstrap_rg_type(&self, rg_type_schema: &TupleDescriptor) {
         // Definiramo seznam vseh osnovnih tipov, ki jih sistem podpira
         let type_definitions = DataType::type_definitions();
         for (oid, name, len, byval) in type_definitions {
@@ -326,15 +327,14 @@ impl CatalogManager {
                 typbyval: byval,
             }.make_tuple(rg_type_schema);
             HeapAccess::insert(
-                self.storage.clone(), 
-                xid, 
+                self.storage.clone(),
                 RG_TYPE_OID, 
                 &mut tuple
             );
         }
     }
 
-    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &TupleDescriptor, xid: TransactionId) {
+    fn bootstrap_rg_namespace(&self, rg_namespace_schema: &TupleDescriptor) {
         let mut tuple = RGNamespace {
             oid: RG_NAMESPACE_OID as i32,
             nspname: "public".to_string(),
@@ -342,8 +342,7 @@ impl CatalogManager {
             nspacl: 0,   // TODO: hardcoded for now
         }.make_tuple(rg_namespace_schema);
         HeapAccess::insert(
-            self.storage.clone(), 
-            xid, 
+            self.storage.clone(),
             RG_NAMESPACE_OID, 
             &mut tuple
         );

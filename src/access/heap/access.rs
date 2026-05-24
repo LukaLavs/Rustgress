@@ -2,11 +2,12 @@ use std::sync::Arc;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag};
 use crate::storage::disk::manager::Table;
 use crate::access::tuple::tuple::HeapTuple;
-use crate::common::types::{TransactionId, RowId};
+use crate::common::types::{RowId};
 use crate::storage::manager::StorageManager;
 use crate::storage::buffer::manager::BufferFrame;
 use crate::storage::page::page::Page;
 use crate::access::tuple::hpx::HeapPageExt;
+use crate::access::transaction::context::get_current_xid;
 
 
 pub struct HeapAccess;
@@ -15,10 +16,11 @@ pub struct HeapAccess;
 impl HeapAccess {
     pub fn insert(
         storage: Arc<StorageManager>,
-        xid: TransactionId,
         table_oid: u32,
         tuple: &mut HeapTuple,
     ) -> RowId {
+        let xid = get_current_xid();
+        assert!(xid != 0, "No active transaction found in context for insert operation");
         let bpm = storage.get_bpm();
         let table = storage.get_table(table_oid);
 
@@ -87,10 +89,11 @@ impl HeapAccess {
 impl HeapAccess {    
     pub fn delete(
         storage: Arc<StorageManager>,
-        xid: TransactionId,
         table_oid: u32,
         rid: RowId,
     ) -> bool {
+        let xid = get_current_xid();
+        assert!(xid != 0, "No active transaction found in context for delete operation");
         let bpm = storage.get_bpm();
         let table = storage.get_table(table_oid);
         let tag = BufferTag { 
@@ -113,16 +116,17 @@ impl HeapAccess {
 impl HeapAccess {
     pub fn update(
         storage: Arc<StorageManager>,
-        xid: TransactionId,
         table_oid: u32,
         rid: RowId,
         new_tuple: &mut HeapTuple,
     ) -> RowId {
-        let deleted = Self::delete(storage.clone(), xid, table_oid, rid);
+        let xid = get_current_xid();
+        assert!(xid != 0, "No active transaction found in context for update operation");
+        let deleted = Self::delete(storage.clone(), table_oid, rid);
         if !deleted {
             panic!("Update failed: could not find old tuple at {:?}", rid);
         }
-        let new_rid = Self::insert(storage.clone(), xid, table_oid, new_tuple);
+        let new_rid = Self::insert(storage.clone(), table_oid, new_tuple);
         Self::link_tuples(storage, table_oid, rid, new_rid); // TODO: Check if t_ctid needs update
         new_rid
     }

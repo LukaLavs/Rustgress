@@ -11,29 +11,28 @@ use rustgress::catalog::manager::CatalogManager;
 use rustgress::query::parser::parser::*;
 use rustgress::query::executor::executor::ExecutionEngine; 
 use rustgress::query::json::translator::WebTranslator;
+use rustgress::access::transaction;//context::{set_current_xid, clear_current_xid};
 
 fn main() {
-    println!("=== RUSTGRESS HTTP SERVER ŠTARTUJE ===");
+    println!("Rustgress Server has Started!");
 
-    // 1. Nastavitev deljenih sistemskih komponent
     let bpm = Arc::new(BufferPoolManager::new(50));
     let sm = Arc::new(StorageManager::new(bpm.clone()));
     let tm = Arc::new(TransactionManager::new());
     let cm = Arc::new(CatalogManager::new(sm.clone(), tm.clone()));
     
-    // Naložimo sistemske kataloge ali jih inicializiramo
-    let completed = cm.bootstrap_system_catalogs();
-    if completed { // system catalogs were created for the first time
+    // On first inicalization we create system catalogs and run startup .rgsql scripts.
+    let db_inicialization = cm.bootstrap_system_catalogs();
+    if db_inicialization {
         let engine = ExecutionEngine::new(bpm.clone(), sm.clone(), tm.clone(), cm.clone());
         run_bootstrap_scripts(&engine, "src/utils/rgsql_scripts/bootstrap");
     };
-    println!("[Server] Sistemski katalogi so pripravljeni.");
+    println!("System catalogs initialized.");
 
-    // 2. Zaženemo TCP Listener na vratih 8080
-    let listener = TcpListener::bind("127.0.0.1:8080").expect("Ni mogoče zasedati vrat 8080");
-    println!("[Server] Poslušam na http://127.0.0.1:8080 ...");
+    let listener = TcpListener::bind("127.0.0.1:8080").expect("Perhaps port 8080 is already in use?");
+    println!("Server listening on http://127.0.0.1:8080");
 
-    // Neskončna zanka, ki sprejema odjemalce
+    // handle incoming connections in a loop
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -42,19 +41,19 @@ fn main() {
                 let tm_c = tm.clone();
                 let cm_c = cm.clone();
 
-                // Za vsako povezavo ustvarimo novo nit
+                // spawn new thread for each connection
                 thread::spawn(move || {
                     handle_connection(stream, bpm_c, sm_c, tm_c, cm_c);
                 });
             }
             Err(e) => {
-                eprintln!("[Server] Napaka pri sprejemanju povezave: {}", e);
+                eprintln!("Server error when receiving connection: {}", e);
             }
         }
     }
 }
 
-/// Skrbi za posamezno HTTP povezavo
+/// Handle a single client connection: read the request, execute the SQL, and send back the response.
 fn handle_connection(
     mut stream: TcpStream,
     bpm: Arc<BufferPoolManager>,
@@ -64,36 +63,34 @@ fn handle_connection(
 ) {
     let mut buffer = [0; 2048];
     if let Err(e) = stream.read(&mut buffer) {
-        eprintln!("Napaka pri branju iz streama: {}", e);
+        eprintln!("Server error when reading from stream: {}", e);
         return;
     }
-
     let request = String::from_utf8_lossy(&buffer[..]);
     
-    // Podpiramo samo POST zahteve
+    // Accept POST requests with SQL in the body.
     if request.starts_with("POST") {
         if let Some(body_start) = request.find("\r\n\r\n") {
             let sql_query = request[body_start + 4..].trim().trim_matches('"');
             
             if sql_query.is_empty() {
-                send_http_error(&mut stream, "Prazen SQL ukaz.");
+                send_http_error(&mut stream, "Server received empty SQL query.");
                 return;
             }
 
-            println!("[Server] Prejet SQL: \"{}\"", sql_query);
+            println!("Server recieved SQL query: \"{}\"", sql_query);
 
-            // 3. PARSANJE IN IZVEDBA POIZVEDBE
+            // Parsing and executing the SQL query
             let mut parser = SQLParser::new(sql_query);
             match parser.parse_statement() {
                 Ok(statement) => {
                     let engine = ExecutionEngine::new(bpm.clone(), sm.clone(), tm.clone(), cm.clone());
-                    
-                    // Zaženemo transakcijo
-                    let xid = tm.begin();
-                    
-                    // --- POPRAVEK: Lovimo tako rezultate kot dinamično shemo iz executorja ---
+
+                    let xid = tm.begin(); // begin a transaction
+                    transaction::context::set_current_xid(xid); // save xid in thread-local context
+
                     let (rezultati, izhodna_shema) = 
-                        match engine.execute_statement(statement, xid) {
+                        match engine.execute_statement(statement) {
                             Ok((res, shema)) => (res, shema),
                             Err(e) => {
                                 tm.abort(xid);
@@ -103,13 +100,11 @@ fn handle_connection(
                         };
                     
                     tm.commit(xid);
-                    bpm.flush_all(); 
+                    transaction::context::clear_current_xid(); // clear xid from thread-local context
+                    bpm.flush_all(); // tehnically we should only flush on program exit (this is here for testing)
 
-                    // --- POPRAVEK: Nič več trdo kodiranega iskanja sheme iz CatalogManagerja! ---
-                    // Translatorju pošljemo natančno tisto shemo, ki jo je sestavil ProjectionExecutor.
                     let json_output = WebTranslator::to_web_json(&izhodna_shema, &rezultati);
 
-                    // 5. POŠILJANJE HTTP ODGOVORA S CORS PODPORO
                     let response = format!(
                         "HTTP/1.1 200 OK\r\n\
                         Content-Type: application/json\r\n\
@@ -120,7 +115,6 @@ fn handle_connection(
                         json_output.len(),
                         json_output
                     );
-
                     let _ = stream.write_all(response.as_bytes());
                 }
                 Err(napaka) => {
@@ -135,7 +129,7 @@ fn handle_connection(
                         Access-Control-Allow-Headers: Content-Type\r\n\r\n";
         let _ = stream.write_all(response.as_bytes());
     } else {
-        send_http_error(&mut stream, "Podpiramo samo POST zahteve z SQL telesom.");
+        send_http_error(&mut stream, "Server supports only POST requests with SQL body.");
     }
     
     let _ = stream.flush();
@@ -159,6 +153,48 @@ fn send_http_error(stream: &mut TcpStream, error_msg: &str) {
 }
 
 /// Additional scripts for inicialization.
+// fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
+//     use std::fs;
+//     let path = std::path::Path::new(folder_path);
+//     if !path.is_dir() { return; }
+//     if let Ok(entries) = fs::read_dir(path) {
+//         for entry in entries.flatten() {
+//             let path = entry.path();
+//             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
+//                 let code = fs::read_to_string(&path).unwrap();
+//                 let mut parser = SQLParser::new(&code);
+//                 match parser.parse_script() {
+//                     Ok(statements) => {
+//                         for statement in statements {
+//                             let xid = engine.tm.begin();
+//                             match engine.execute_statement(statement, xid) {
+//                                 Ok(_) => {
+//                                     // 3. Commit
+//                                     engine.tm.commit(xid);
+//                                 },
+//                                 Err(e) => {
+//                                     // 4. Abort ob napaki
+//                                     engine.tm.abort(xid);
+//                                     eprintln!("[Bootstrap] Napaka pri ukazu v {}: {}", path.display(), e);
+//                                     break;
+//                                 }
+//                             }
+//                         }
+//                         println!("[Bootstrap] USPEH ({})", path.display());
+//                     }
+//                     Err(e) => eprintln!("[Bootstrap] Parser error v {}: {}", path.display(), e),
+//                 }
+//             }
+//         }
+//     }
+// }
+
+
+
+// --- THIS VERSION BELOW IS better, but currently heap scan doesn't know its own transaction id, and 
+//     it can not see changes made in its transaction. We shouldn't just add xid to heap scan as it is wasteful,
+//     perhaps we should somehow get it to snapshot.
+
 fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
     use std::fs;
     let path = std::path::Path::new(folder_path);
@@ -167,65 +203,22 @@ fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
+                println!("[Bootstrap] Running script: {}", path.display());
                 let code = fs::read_to_string(&path).unwrap();
-                let mut parser = SQLParser::new(&code);
-                match parser.parse_script() {
-                    Ok(statements) => {
-                        for statement in statements {
-                            let xid = engine.tm.begin();
-                            match engine.execute_statement(statement, xid) {
-                                Ok(_) => {
-                                    // 3. Commit
-                                    engine.tm.commit(xid);
-                                },
-                                Err(e) => {
-                                    // 4. Abort ob napaki
-                                    engine.tm.abort(xid);
-                                    eprintln!("[Bootstrap] Napaka pri ukazu v {}: {}", path.display(), e);
-                                    break;
-                                }
-                            }
-                        }
-                        println!("[Bootstrap] USPEH ({})", path.display());
+                let xid = engine.tm.begin(); // each file gets its own transaction id.
+                transaction::context::set_current_xid(xid);
+                match engine.run_script_in_transaction(&code, xid) {
+                    Ok(_) => {
+                        engine.tm.commit(xid);
+                        println!("[Bootstrap] Success ({})", path.display());
+                    },
+                    Err(err) => {
+                        engine.tm.abort(xid);
+                        eprintln!("[Bootstrap] Error ({}): {}", path.display(), err);
                     }
-                    Err(e) => eprintln!("[Bootstrap] Parser error v {}: {}", path.display(), e),
                 }
+                transaction::context::clear_current_xid();
             }
         }
     }
 }
-
-
-
-// --- THIS VERSION BELOW IS better, but currently heap scan doesn't know its own transaction id, and 
-//     it can not see changes made in its transaction. We shouldn't just add xid to heap scan as it is wasteful,
-//     perhaps we should somehow get it to snapshot.
-
-// fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
-//     use std::fs;
-//     let path = std::path::Path::new(folder_path);
-//     if !path.is_dir() { return; }
-
-//     if let Ok(entries) = fs::read_dir(path) {
-//         for entry in entries.flatten() {
-//             let path = entry.path();
-//             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
-//                 let code = fs::read_to_string(&path).unwrap();
-                
-//                 // --- TU JE SPREMEMBA: Vsaka datoteka je ena transakcija ---
-//                 let xid = engine.tm.begin(); 
-                
-//                 match engine.run_script_in_transaction(&code, xid) {
-//                     Ok(_) => {
-//                         engine.tm.commit(xid);
-//                         println!("[Bootstrap] USPEH ({})", path.display());
-//                     },
-//                     Err(err) => {
-//                         engine.tm.abort(xid);
-//                         eprintln!("[Bootstrap] NAPAKA ({}): {}", path.display(), err);
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }

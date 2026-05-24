@@ -245,11 +245,10 @@ pub struct ProjectionExecutor {
     child: Box<dyn Executor>,
     project_columns: Vec<String>, // selected column names
     output_schema: Arc<TupleDescriptor>,
-    xid: TransactionId,
 }
 
 impl ProjectionExecutor {
-    pub fn new(child: Box<dyn Executor>, project_columns: Vec<String>, xid: TransactionId) -> Self {
+    pub fn new(child: Box<dyn Executor>, project_columns: Vec<String>) -> Self {
         let child_schema = child.get_tuple_desc();
         let mut out_columns = Vec::new();
         for col_name in &project_columns { // generate filtered schema (discard unselected columns)
@@ -262,7 +261,6 @@ impl ProjectionExecutor {
             child,
             project_columns,
             output_schema,
-            xid,
         }
     }
 }
@@ -281,7 +279,7 @@ impl Executor for ProjectionExecutor {
                     projected_values.push(all_values[idx].clone());
                 }
             }
-            Some(self.output_schema.pack(projected_values, self.xid)) // pack with new schema
+            Some(self.output_schema.pack(projected_values)) // pack with new schema
         } else {
             None
         }
@@ -440,8 +438,8 @@ impl ExecutionEngine {
     }
 
     /// Creates an execution plan and executes the query.
-    pub fn execute_statement(&self, statement: SQLStatement, xid: TransactionId
-        ) -> Result<(Vec<Vec<Value>>, Arc<TupleDescriptor>), String> {
+    pub fn execute_statement(&self, statement: SQLStatement) 
+        -> Result<(Vec<Vec<Value>>, Arc<TupleDescriptor>), String> {
         match statement {
             // =========================================================================
             // 1. SELECT
@@ -481,7 +479,7 @@ impl ExecutionEngine {
                         }
                     }
                     if !project_names.is_empty() {
-                        plan = Box::new(ProjectionExecutor::new(plan, project_names, xid));
+                        plan = Box::new(ProjectionExecutor::new(plan, project_names));
                     }
                 }
                 if let Some(lim_val) = limit {
@@ -524,8 +522,8 @@ impl ExecutionEngine {
                     };
                     row_values.push(val);
                 }
-                let mut tuple = schema.pack(row_values, xid);
-                HeapAccess::insert(self.sm.clone(), xid, table_oid, &mut tuple);
+                let mut tuple = schema.pack(row_values);
+                HeapAccess::insert(self.sm.clone(), table_oid, &mut tuple);
                 inserted_count += 1;
             }
             // Report back with number of inserted rows
@@ -580,7 +578,7 @@ impl ExecutionEngine {
                 });
             }
             let new_table_schema = TupleDescriptor::new(catalog_columns); // create table schema
-            let new_oid = self.cm.create_table(xid, &name, 0, &new_table_schema);
+            let new_oid = self.cm.create_table(&name, 0, &new_table_schema);
             // Report back with a message:
             let out_desc = Arc::new(TupleDescriptor::new(vec![
                 tuple::desc::Column {
@@ -602,7 +600,7 @@ impl ExecutionEngine {
             name,
             if_exists,
         } => {
-            let success = self.cm.drop_table(xid, &name);
+            let success = self.cm.drop_table(&name);
 
             let message = if success {
                 format!("Table {} dropped successfully.", name)
@@ -659,7 +657,6 @@ impl ExecutionEngine {
             for rid in rids_to_delete {
                 let success = HeapAccess::delete(
                     self.sm.clone(),
-                    xid,
                     table_oid,
                     rid
                 );
@@ -726,10 +723,9 @@ impl ExecutionEngine {
                         }
                     }
                 }
-                let mut new_tuple = schema.pack(current_values, xid);
+                let mut new_tuple = schema.pack(current_values);
                 HeapAccess::update(
                     self.sm.clone(),
-                    xid,
                     table_oid,
                     rid,
                     &mut new_tuple
@@ -747,7 +743,7 @@ impl ExecutionEngine {
         }
 
         // =========================================================================
-        // PRIVZETE VEJE (Popravljene na prazen TupleDescriptor)
+        // UNSUPORTED
         // =========================================================================
         _ => {
             let out_desc = Arc::new(TupleDescriptor::new(Vec::new()));
@@ -762,7 +758,7 @@ impl ExecutionEngine {
         let mut parser = SQLParser::new(code);
         let statements = parser.parse_script()?;
         for stmt in statements {
-            self.execute_statement(stmt, xid)?;
+            self.execute_statement(stmt)?;
         }
         Ok(())
     }

@@ -2,7 +2,6 @@ use crate::access::tuple::desc::{TupleDescriptor, Column};
 use super::super::types::{DataType, Value};
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
-use crate::common::constants::SYSTEM_XID;
 
 pub struct RGClass {
     pub oid: i32,             // unique table identifier
@@ -36,7 +35,7 @@ impl RGSomething for RGClass {
             Value::Float(self.reltuples),
             Value::Integer(self.relspecial),
             Value::Integer(self.relnatts),
-        ], SYSTEM_XID)
+        ])
     }
     fn from_tuple(tuple: &HeapTuple) -> Self {
         let schema = Self::get_descriptor();

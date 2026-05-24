@@ -1,4 +1,5 @@
 use std::sync::{Arc, RwLock};
+use crate::common::constants::USER_XID_START;
 use crate::common::types::TransactionId;
 use crate::storage::buffer::manager::{BufferPoolManager, BufferTag, BufferFrame};
 use crate::storage::disk::manager::Table;
@@ -7,6 +8,7 @@ use crate::access::tuple::tuple::{HeapTuple, HeapTupleView};
 use super::super::transaction::manager::{TransactionManager, Snapshot};
 use std::collections::HashMap;
 use std::cell::RefCell;
+use crate::access::transaction::context::{get_current_xid};
 
 pub struct HeapScan {
     bpm: Arc<BufferPoolManager>, // pointer to buffer pool manager
@@ -17,6 +19,7 @@ pub struct HeapScan {
     current_slot_idx: u16,       // row number in currently viewed page
     active_frame: Option<Arc<BufferFrame>>, // current page pinned in RAM
     visibility_cache: RefCell<HashMap<TransactionId, bool>>, // cache of transaction visibility results to avoid repeated checks
+    current_xid: Option<TransactionId>, // sometimes scan must also see its own uncommited transaction
 }
 
 impl HeapScan {
@@ -31,13 +34,22 @@ impl HeapScan {
             current_slot_idx: 1,
             active_frame: None,
             visibility_cache: RefCell::new(HashMap::new()),
+            current_xid: None,
         }
     }
-
+    pub fn add_current_xid(&mut self, xid: TransactionId) {
+        self.current_xid = Some(xid);
+    }
+    pub fn drop_current_xid(&mut self) {
+        self.current_xid = None;
+    }
     pub fn is_xid_visible(&self, xid: TransactionId) -> bool {
-        if xid == 0 { return true; } // system transactions are always visible
-        if xid == self.snapshot.max_xid {
-            return true; // own transactions are always visible
+        if xid < USER_XID_START { return true; } // system transactions are always visible
+        if Some(xid) == self.current_xid {
+            return true; // own uncommitted transaction is visible to itself
+        }
+        if xid == get_current_xid() {
+            return true; // own transactions and system transactions are always visible
         }
         {
             let cache = self.visibility_cache.borrow();

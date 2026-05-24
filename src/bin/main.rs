@@ -8,6 +8,7 @@ use rustgress::access::tuple::desc::{TupleDescriptor, Column};
 use rustgress::catalog::types::{DataType, Value};
 use rustgress::access::heap::access::HeapAccess;
 use rustgress::access::heap::scan::HeapScan;
+use rustgress::access::transaction::context::{set_current_xid, clear_current_xid};
 // use rustgress::query::parser::parser::*;
 // use rustgress::query::executor::executor::ExecutionEngine; 
 // use rustgress::query::json::translator::WebTranslator;
@@ -31,9 +32,10 @@ fn main() {
     // 3. Create the table
     let table_name = "messages";
     let xid_setup = tm.begin();
-    let msg_table_oid = cm.create_table(xid_setup, table_name, 0, &schema);
+    set_current_xid(xid_setup);
+    let msg_table_oid = cm.create_table(table_name, 0, &schema);
     tm.commit(xid_setup);
-   
+    clear_current_xid();
     println!("[Main] Table '{}' created with OID: {}", table_name, msg_table_oid);
 
     // 4. Simulate 3 concurrent users
@@ -45,14 +47,16 @@ fn main() {
         
         let handle = thread::spawn(move || {
             let xid = tm_c.begin();
+            set_current_xid(xid);
             for i in 1..=10 {
                 let mut tuple = schema_c.pack(vec![
                     Value::Integer(user_id as i32),
                     Value::Varchar(format!("Hello from user {}, msg #{}", user_id, i)),
-                ], 0);
-                HeapAccess::insert(sm_c.clone(), xid, msg_table_oid, &mut tuple);
+                ]);
+                HeapAccess::insert(sm_c.clone(), msg_table_oid, &mut tuple);
             }
             tm_c.commit(xid);
+            clear_current_xid();
         });
         handles.push(handle);
     }
@@ -112,14 +116,16 @@ fn main() {
 
     // --- KORAK A: Izvedba DROP TABLE ---
     let drop_xid = tm.begin();
+    set_current_xid(drop_xid);
     println!("[Korak A] Začeta DROP transakcija z XID: {}", drop_xid);
     
-    let drop_success = cm.drop_table(drop_xid, table_name);
+    let drop_success = cm.drop_table(table_name);
     println!("[Korak A] cm.drop_table() izveden. Rezultat: {}", drop_success);
     
     // --- KORAK B: Commit drop transakcije ---
     println!("[Korak B] Potrjujem (commit) DROP transakcijo (XID {})...", drop_xid);
     tm.commit(drop_xid);
+    clear_current_xid();
 
     // --- KORAK C: Testiranje vidnosti preko CatalogManagera (Kot HTTP server) ---
     println!("\n[Korak C] Simulacija NOVEGA HTTP zahtevka...");
