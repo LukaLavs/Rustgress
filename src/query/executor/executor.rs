@@ -167,9 +167,16 @@ impl FilterExecutor {
         }
     }
 
-    /// evaluates logical operations
+    /// evaluates logical operations with cross-type support for numbers
     fn eval_comparison(&self, left: &Value, op: &ComparisonOperator, right: &Value) -> bool {
+        // Najprej preverimo, ali gre za numerično primerjavo (lahko sta mešana Integer in Float)
         match (left, right) {
+            // Če je vsaj eden od njiju Float (ali oba), ju primerjamo kot f32 (ali f64, odvisno od tvojega Value enuma)
+            (Value::Float(l), Value::Float(r)) => self.compare_floats(*l, *r, op),
+            (Value::Float(l), Value::Integer(r)) => self.compare_floats(*l, *r as f32, op),
+            (Value::Integer(l), Value::Float(r)) => self.compare_floats(*l as f32, *r, op),
+
+            // Klasična celoštevilska primerjava
             (Value::Integer(l), Value::Integer(r)) => match op {
                 ComparisonOperator::Eq => l == r,
                 ComparisonOperator::Ne => l != r,
@@ -179,6 +186,8 @@ impl FilterExecutor {
                 ComparisonOperator::Gte => l >= r,
                 _ => false,
             },
+            
+            // Tekstovna primerjava
             (Value::Varchar(l), Value::Varchar(r)) => match op {
                 ComparisonOperator::Eq => l == r,
                 ComparisonOperator::Ne => l != r,
@@ -188,12 +197,28 @@ impl FilterExecutor {
                 ComparisonOperator::Gte => l >= r,
                 _ => false,
             },
+            
+            // Logična primerjava
             (Value::Boolean(l), Value::Boolean(r)) => match op {
                 ComparisonOperator::Eq => l == r,
                 ComparisonOperator::Ne => l != r,
                 _ => false,
             },
-            _ => false, // TODO: maybe here it would make sense to throw error
+            _ => false,
+        }
+    }
+
+    /// Pomožna funkcija za varno primerjavo floatov z toleranco (epsilon)
+    fn compare_floats(&self, l: f32, r: f32, op: &ComparisonOperator) -> bool {
+        let epsilon = 1e-6; // Natančnost za f32 (za f64 bi uporabil 1e-9)
+        match op {
+            ComparisonOperator::Eq => (l - r).abs() < epsilon,
+            ComparisonOperator::Ne => (l - r).abs() >= epsilon,
+            ComparisonOperator::Lt => l < r,
+            ComparisonOperator::Gt => l > r,
+            ComparisonOperator::Lte => l <= r,
+            ComparisonOperator::Gte => l >= r,
+            _ => false,
         }
     }
 
@@ -379,27 +404,42 @@ impl Executor for SortExecutor {
         let desc = self.child.get_tuple_desc();
         
         // TODO: Is this slow?
-        let sort_col_idx = match desc.columns.iter().position(|c| c.name == self.order_by.column) {
-            Some(idx) => idx,
-            None => {
-                while let Some(tuple) = self.child.next() {
-                    self.sorted_tuples.push(tuple);
-                }
-                return;
+        let mut sort_keys = Vec::new(); // Shranili bomo (index_stolpca, is_descending)
+        for field in &self.order_by.fields {
+            if let Some(idx) = desc.columns.iter().position(|c| c.name == field.column) {
+                sort_keys.push((idx, field.descending));
             }
-        };
+        }
+
+        // Vse vrstice naberemo v spomin
         while let Some(tuple) = self.child.next() {
             self.sorted_tuples.push(tuple);
         }
+
+        // 2. Glavna logika za večnivojsko sortiranje
         self.sorted_tuples.sort_by(|a, b| {
-            let val_a = &desc.unpack_from_tuple(a)[sort_col_idx];
-            let val_b = &desc.unpack_from_tuple(b)[sort_col_idx];
-            let ordering = Self::compare_values(val_a, val_b);
-            if self.order_by.descending {
-                ordering.reverse() // originallq we sorted ascending
-            } else {
-                ordering
+            let row_a = desc.unpack_from_tuple(a);
+            let row_b = desc.unpack_from_tuple(b);
+
+            // Pregledamo vse stolpce po vrstnem redu pomembnosti
+            for &(col_idx, is_descending) in &sort_keys {
+                let val_a = &row_a[col_idx];
+                let val_b = &row_b[col_idx];
+                
+                let mut ordering = Self::compare_values(val_a, val_b);
+                
+                if is_descending {
+                    ordering = ordering.reverse();
+                }
+
+                // Če sta vrednosti različni, imamo zmagovalca in končamo primerjavo za to vrstico!
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+                // Če sta enaki, zanka nadaljuje na naslednji stolpec (npr. illiteracy)
             }
+
+            Ordering::Equal // Če so vsi stolpci enaki
         });
     }
     fn next(&mut self) -> Option<HeapTuple> {

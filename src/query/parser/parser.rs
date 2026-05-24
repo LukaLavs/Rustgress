@@ -114,9 +114,14 @@ pub enum SelectColumn {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct OrderBy {
+pub struct OrderByField {
     pub column: String,
     pub descending: bool,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct OrderBy {
+    pub fields: Vec<OrderByField>, // Sedaj imamo seznam stolpcev za sortiranje!
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -381,22 +386,37 @@ impl<'a> SQLParser<'a> {
         };
 
         let order_by = if self.peek_keyword("order")? {
-            self.parse_keyword()?;
+            self.parse_keyword()?; // ORDER
             self.expect_keyword("by")?;
 
-            let column = self.parse_identifier()?;
+            let mut fields = Vec::new();
 
-            let descending = if self.peek_keyword("desc")? {
-                self.parse_keyword()?;
-                true
-            } else {
-                false
-            };
+            loop {
+                let column = self.parse_identifier()?;
+                self.skip_whitespace();
 
-            Some(OrderBy {
-                column,
-                descending,
-            })
+                let descending = if self.peek_keyword("desc")? {
+                    self.parse_keyword()?;
+                    true
+                } else if self.peek_keyword("asc")? {
+                    self.parse_keyword()?;
+                    false
+                } else {
+                    false // Privzeto je ASC
+                };
+
+                fields.push(OrderByField { column, descending });
+
+                self.skip_whitespace();
+                if self.peek_char(',') {
+                    self.chars.next();
+                    self.position += 1;
+                } else {
+                    break;
+                }
+            }
+
+            Some(OrderBy { fields })
         } else {
             None
         };
@@ -786,19 +806,74 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
         Ok(expr)
     }
 
-    // Parsa osnovno primerjavo tipa: stolpec = vrednost
+    // Parsa osnovno primerjavo tipa: stolpec < operator > vrednost
     fn parse_primary_comparison(&mut self) -> Result<Expression, String> {
         let left_ident = self.parse_identifier()?;
         
         self.skip_whitespace();
-        self.expect_char('=')?; // Zaenkrat podpirava samo enakost (=)
         
-        let val = self.parse_sql_value()?;
+        // 1. Preberemo operator (lahko je eno- ali dvo-znakovni)
+        let op = match self.chars.peek() {
+            Some(&'=') => {
+                self.chars.next(); self.position += 1;
+                ComparisonOperator::Eq
+            }
+            Some(&'!') => {
+                self.chars.next(); self.position += 1;
+                self.expect_char('=')?; // pričakujemo '=' za '!='
+                ComparisonOperator::Ne
+            }
+            Some(&'<') => {
+                self.chars.next(); self.position += 1;
+                if self.peek_char('=') {
+                    self.chars.next(); self.position += 1;
+                    ComparisonOperator::Lte // <=
+                } else if self.peek_char('>') {
+                    self.chars.next(); self.position += 1;
+                    ComparisonOperator::Ne  // <> je star SQL standard za !=
+                } else {
+                    ComparisonOperator::Lt  // <
+                }
+            }
+            Some(&'>') => {
+                self.chars.next(); self.position += 1;
+                if self.peek_char('=') {
+                    self.chars.next(); self.position += 1;
+                    ComparisonOperator::Gte // >=
+                } else {
+                    ComparisonOperator::Gt  // >
+                }
+            }
+            Some(c) => return Err(format!("Expected comparison operator (=, !=, <, >, <=, >=), found '{}'", c)),
+            None => return Err("Expected comparison operator, found EOF".to_string()),
+        };
+        
+        self.skip_whitespace();
+        // --- POPRAVEK ZA DESNO STRAN ---
+        // Poglejmo naslednji znak. Če je črka, gre verjetno za drug STOLPEC!
+        let right_expr = if let Some(&c) = self.chars.peek() {
+            if c.is_alphabetic() {
+                let right_keyword = self.parse_keyword()?;
+                // Izjema: Če je beseda TRUE, FALSE ali NULL, je to še vedno Literal
+                match right_keyword.to_lowercase().as_str() {
+                    "true" => Expression::Literal(SQLValue::Boolean(true)),
+                    "false" => Expression::Literal(SQLValue::Boolean(false)),
+                    "null" => Expression::Literal(SQLValue::Null),
+                    _ => Expression::Column(right_keyword), // V vseh ostalih primerih je to STOLPEC!
+                }
+            } else {
+                // Če ni črka (ampak npr. številka ali narekovaj), preberemo klasiko
+                let val = self.parse_sql_value()?;
+                Expression::Literal(val)
+            }
+        } else {
+            return Err("Expected value or column on the right side of comparison".to_string());
+        };
 
         Ok(Expression::ComparisonOp(
             Box::new(Expression::Column(left_ident)),
-            ComparisonOperator::Eq,
-            Box::new(Expression::Literal(val)),
+            op,
+            Box::new(right_expr), // Sedaj je lahko Column ali Literal!
         ))
     }
 }

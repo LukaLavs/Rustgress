@@ -48,12 +48,14 @@ impl ItemIdData {
         self.set_lp_len(0);
     }
 }
+
+/// Pages store items of some kind, which must satisfy the PageItem trait.
 pub trait PageItem {
     fn len(&self) -> usize;
     fn serialize_into(&self, dest: &mut [u8]);
 }
 
-impl PageItem for &[u8] {
+impl PageItem for &[u8] { // raw bytes are a common example of valid page items
     fn len(&self) -> usize { (*self).len() }
     fn serialize_into(&self, dest: &mut [u8]) {
         dest.copy_from_slice(self);
