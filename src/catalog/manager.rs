@@ -19,6 +19,7 @@ use crate::catalog::catalogs::{
 use crate::access::heap::scan::HeapScan;
 use crate::common::types::RowId;
 use crate::access::transaction::context::{get_current_xid, set_current_xid, clear_current_xid};
+use crate::utils::debug::errors::{CatalogError, LockError};
 
 pub struct CatalogManager {
     pub storage: Arc<StorageManager>,
@@ -27,56 +28,66 @@ pub struct CatalogManager {
 }
 
 impl CatalogManager {
-    pub fn new(storage: Arc<StorageManager>, tm: Arc<TransactionManager>) -> Self {
-        let initial_oid = Self::find_next_avalible_oid(storage.clone(), tm.clone());
-        Self {
+    pub fn new(storage: Arc<StorageManager>, tm: Arc<TransactionManager>) -> Result<Self, LockError> {
+        let initial_oid = Self::find_next_avalible_oid(storage.clone(), tm.clone())?;
+        Ok(Self {
             storage,
             tm,
             next_oid: Mutex::new(initial_oid),
-        }
+        })
     }
-    pub fn find_next_avalible_oid(storage: Arc<StorageManager>, tm: Arc<TransactionManager>) -> u32 {
-        let rg_class_oid = RG_CLASS_OID;
-        let path = format!("data/{}", rg_class_oid);
+    /// Scans the rg_class catalog to find the maximum OID currently in use, it returns the next one.
+    pub fn find_next_avalible_oid(storage: Arc<StorageManager>, tm: Arc<TransactionManager>) -> Result<u32, LockError> {
+        let path = format!("data/{}", RG_CLASS_OID);
         if !std::path::Path::new(&path).exists() { // in bootstrap phase.
-            return USER_XID_START;
+            return Ok(USER_XID_START);
         }
-        let rg_class_table = storage.get_table(rg_class_oid);
+        let rg_class_table = match storage.get_table(RG_CLASS_OID) {
+            Ok(table) => table,
+            Err(err) => {
+                // TODO: here we could just create rg_class table and recover at lest something
+                panic!( // critical error
+                    "rg_class with OID {} not found during OID initialization: {}", RG_CLASS_OID, err
+                );
+            }
+        };
         let bpm = storage.get_bpm();
-        let scan = HeapScan::new(bpm, rg_class_table, tm);
+        let scan = HeapScan::new(bpm, rg_class_table, tm)?;
         let schema = RGClass::get_descriptor();
         let mut max_oid = USER_XID_START;
         for tuple in scan {
             let values = schema.unpack_from_tuple(&tuple);
             // in RGClass oid is first column (zero indexed)
             if let Some(oid_val) = values.get(0) {
-                println!("CatalogManager: Inspecting OID from rg_class: {:?}", oid_val);
+                if cfg!(debug_assertions) {println!("CatalogManager: Inspecting OID from rg_class: {:?}", oid_val)};
                 if let Some(oid) = oid_val.as_i32() {
-                    println!("CatalogManager: Found existing OID in rg_class: {}", oid);
+                    if cfg!(debug_assertions) {println!("CatalogManager: Found existing OID in rg_class: {}", oid)};
                     if oid as u32 >= max_oid {
                         max_oid = (oid as u32) + 1;
                     }
                 }
             }
         }
-        println!("CatalogManager: Next available OID determined to be: {}", max_oid);
-        max_oid
+        if cfg!(debug_assertions) {println!("CatalogManager: Next available OID determined to be: {}", max_oid)};
+        Ok(max_oid)
     }
-    fn generate_next_oid(&self) -> u32 {
-        let mut lock = self.next_oid.lock().unwrap();
+    fn generate_next_oid(&self) -> Result<u32, CatalogError> {
+        let mut lock = self.next_oid.lock().map_err(|_| LockError)?;
         let oid = *lock;
         *lock += 1;
-        oid
+        Ok(oid)
     }
     /// returns new oid
-    pub fn create_table(&self, name: &str, special_size: u16, schema: &TupleDescriptor) -> u32 {
+    pub fn create_table(&self, name: &str, special_size: u16, schema: &TupleDescriptor) -> Result<u32, CatalogError> {
         let xid = get_current_xid();
-        assert!(xid != 0, "No active transaction found in context for create_table operation");
-        let new_oid = self.generate_next_oid();
+        if xid != 0 {
+            return Err(CatalogError::NoActiveTransactions);
+        }
+        let new_oid = self.generate_next_oid()?;
         Table::create(new_oid, special_size);
         {
-            let table_handle = self.storage.get_table(new_oid);
-            let mut table = table_handle.write().unwrap();
+            let table_handle = self.storage.get_table(new_oid)?;
+            let mut table = table_handle.write().map_err(|_| LockError)?;
             table.extend(0); // TODO: hardcoded for now
         }
         let rg_class_schema = RGClass::get_descriptor();
@@ -113,27 +124,28 @@ impl CatalogManager {
             );
         }
 
-        new_oid
+        Ok(new_oid)
     }
 }
 
 impl CatalogManager {
-    pub fn drop_table(&self, table_name: &str) -> bool {
+    pub fn drop_table(&self, table_name: &str) -> Result<bool, CatalogError> {
         let table_oid = match self.get_table_oid(table_name) {
-            Some(oid) => oid as u32,
-            None => return false,
+            Ok(oid) => oid as u32,
+            Err(_) => return Ok(false), // table didn't exist, couldn't drop it
         };
         let bpm = self.storage.get_bpm();
         // DELETE FROM rg_class
-        let class_table = self.storage.get_table(RG_CLASS_OID);
-        if let Some(tuple) = HeapScan::new(bpm.clone(), class_table, self.tm.clone())
+        let class_table = self.storage.get_table(RG_CLASS_OID)?;
+        let mut scan = HeapScan::new(bpm.clone(), class_table.clone(), self.tm.clone())?;
+        if let Some(tuple) = scan
             .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
         {
             HeapAccess::delete(self.storage.clone(), RG_CLASS_OID, tuple.header.get_rid());
         }
         // DELETE FROM rg_attribute
-        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
-        HeapScan::new(bpm.clone(), attr_table, self.tm.clone())
+        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID)?;
+        HeapScan::new(bpm.clone(), attr_table, self.tm.clone())?
             .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
             .for_each(|t| {
                 HeapAccess::delete(self.storage.clone(), RG_ATTRIBUTE_OID, t.header.get_rid());
@@ -143,26 +155,26 @@ impl CatalogManager {
         bpm.flush_all();
         bpm.evict_table_pages(table_oid);
 
-        true
+        Ok(true)
     }
     
-    pub fn drop_table_old(&self, table_name: &str) -> bool {
+    pub fn drop_table_old(&self, table_name: &str) -> Result<bool, CatalogError> {
         let table_oid = match self.get_table_oid(table_name) {
-            Some(oid) => oid as u32,
-            None => return false,
+            Ok(oid) => oid as u32,
+            Err(_) => return Ok(false), // table didn't exist, couldn't drop it
         };
         let bpm = self.storage.get_bpm();
-        let class_table = self.storage.get_table(RG_CLASS_OID);
-        let class_rid_to_delete = HeapScan::new(bpm.clone(), class_table.clone(), self.tm.clone())
+        let class_table = self.storage.get_table(RG_CLASS_OID)?;
+        let class_rid_to_delete = HeapScan::new(bpm.clone(), class_table.clone(), self.tm.clone())?
             .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid)
             .map(|tuple| tuple.header.get_rid());
         if let Some(rid) = class_rid_to_delete {
             HeapAccess::delete(self.storage.clone(),  RG_CLASS_OID, rid);
         }
-        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
+        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID)?;
         
         // Iterator se tukaj zažene in POPOLNOMA zaključi, preden karkoli brišemo
-        let attr_rids_to_delete: Vec<RowId> = HeapScan::new(bpm.clone(), attr_table.clone(), self.tm.clone())
+        let attr_rids_to_delete: Vec<RowId> = HeapScan::new(bpm.clone(), attr_table.clone(), self.tm.clone())?
             .filter(|t| RGAttribute::from_tuple(t).attrelid as u32 == table_oid)
             .map(|t| t.header.get_rid())
             .collect(); // <--- KLJUČNO: collect() posesa vse v spomin in sprosti iterator!
@@ -174,17 +186,15 @@ impl CatalogManager {
         bpm.flush_all(); // Vpiše posodobljena rg_class in rg_attribute na disk
         let _ = std::fs::remove_file(format!("data/{}", table_oid));
         bpm.evict_table_pages(table_oid);
-
-        println!("DropFUNC:Tabela '{}', class_rid_to_delete: {:?}", table_name, class_rid_to_delete);
-        true
+        Ok(true)
     }
 }
 
 impl CatalogManager {
     /// Retrieves the schema of a table given its OID by scanning the rg_attribute catalog.
-    pub fn get_schema(&self, table_oid: u32) -> TupleDescriptor {
-        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID);
-        let scan = HeapScan::new(self.storage.get_bpm(), attr_table, self.tm.clone());
+    pub fn get_schema(&self, table_oid: u32) -> Result<TupleDescriptor, CatalogError> {
+        let attr_table = self.storage.get_table(RG_ATTRIBUTE_OID)?;
+        let scan = HeapScan::new(self.storage.get_bpm(), attr_table, self.tm.clone())?;
         let mut attributes: Vec<RGAttribute> = scan
             .map(|tuple| RGAttribute::from_tuple(&tuple))
             .filter(|attr| attr.attrelid as u32 == table_oid)
@@ -197,33 +207,35 @@ impl CatalogManager {
                 data_type: DataType::from_oid(attr.atttypid as u32),
             })
             .collect();
-        TupleDescriptor::new(columns)
+        Ok(TupleDescriptor::new(columns))
     }
-    pub fn get_table_oid(&self, table_name: &str) -> Option<u32> { // TODO: check if it is safe to replace with get_table_oid
-        let table_handle = self.storage.get_table(RG_CLASS_OID);
-        let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone());
-        scan
+    pub fn get_table_oid(&self, table_name: &str) -> Result<u32, CatalogError> { // TODO: check if it is safe to replace with get_table_oid
+        let table_handle = self.storage.get_table(RG_CLASS_OID)?;
+        let scan = HeapScan::new(self.storage.get_bpm(), table_handle, self.tm.clone())?;
+        let table_oid = scan
             .map(|tuple| RGClass::from_tuple(&tuple))
             .find(|class_entry| class_entry.relname == table_name)
             .map(|class_entry| class_entry.oid as u32)
+            .ok_or_else(|| CatalogError::TableNotFound(table_name.to_string()))?;
+        Ok(table_oid)
     }
 }
 
 impl CatalogManager {
-    pub fn bootstrap_system_catalogs(&self) -> bool {
+    pub fn bootstrap_system_catalogs(&self) -> Result<bool, CatalogError> {
         if std::path::Path::new(&format!("data/{}", RG_CLASS_OID)).exists() {
-            println!("Sistem catalogs exist, skipping bootstrap.");
-            return false;
+            if cfg!(debug_assertions) { println!("Sistem catalogs exist, skipping bootstrap."); }
+            return Ok(false);
         }
-        println!("Starting bootstrap of system catalogs...");
-        std::fs::create_dir_all("data").expect("Folder data could not be created!");
+        println!("Bootstraping system catalogs ...");
+        std::fs::create_dir_all("data").map_err(|_| CatalogError::DataFolderCreationFailed)?;
         {
             Table::create(RG_CLASS_OID, 0);
             Table::create(RG_ATTRIBUTE_OID, 0);
             Table::create(RG_TYPE_OID, 0);
             Table::create(RG_NAMESPACE_OID, 0);
         }
-        let xid = self.tm.begin();
+        let xid = self.tm.begin()?;
         set_current_xid(xid);
 
         let rg_class_schema = RGClass::get_descriptor();
@@ -241,7 +253,7 @@ impl CatalogManager {
         clear_current_xid();
         self.tm.flush();
         println!("Bootstrap finalized.");
-        return true;
+        return Ok(true);
     }
 
     fn bootstrap_rg_class(&self, rg_class_schema: &TupleDescriptor) {

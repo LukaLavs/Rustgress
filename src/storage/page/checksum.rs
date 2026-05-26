@@ -1,10 +1,11 @@
 use crate::storage::page::page::Page;
 use crate::storage::page::header::PageHeaderData;
+use crate::utils::debug::errors::PageError;
 
 pub trait PageChecksumExt {
     fn compute_checksum(&self) -> u16;
-    fn checksum_verified(&self) -> bool;
-    fn update_checksum(&mut self);
+    fn checksum_verified(&self) -> Result<bool, PageError>;
+    fn update_checksum(&mut self) -> Result<(), PageError>;
 }
 
 impl PageChecksumExt for Page {
@@ -27,20 +28,21 @@ impl PageChecksumExt for Page {
         ((crc >> 16) ^ (crc & 0xFFFF)) as u16
     }
 
-    fn checksum_verified(&self) -> bool {
-        let header = self.get_header();
+    fn checksum_verified(&self) -> Result<bool, PageError> {
+        let header = self.get_header()?;
         // 0 is often used to indicate checksums are disabled/unset
         if header.pd_checksum == 0 {
-            return true;
+            return Ok(true);
         }
-        header.pd_checksum == self.compute_checksum()
+        Ok(header.pd_checksum == self.compute_checksum())
     }
 
-    fn update_checksum(&mut self) {
+    fn update_checksum(&mut self) -> Result<(), PageError> {
         let new_checksum = self.compute_checksum();
-        let mut header = self.get_header();
+        let mut header = self.get_header()?;
         header.pd_checksum = new_checksum;
         self.set_header(&header);
+        Ok(())
     }
 }
 

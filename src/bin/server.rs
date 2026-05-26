@@ -12,6 +12,9 @@ use rustgress::query::parser::parser::*;
 use rustgress::query::executor::executor::ExecutionEngine; 
 use rustgress::query::json::translator::WebTranslator;
 use rustgress::access::transaction;//context::{set_current_xid, clear_current_xid};
+use rustgress::utils::debug::errors::{RustgressError as RGE};
+use std::sync::mpsc;
+use rustgress::access::transaction::context::{clear_current_xid, get_thread_error, set_current_xid};
 
 fn main() {
     println!("Rustgress Server has Started!");
@@ -19,38 +22,53 @@ fn main() {
     let bpm = Arc::new(BufferPoolManager::new(50));
     let sm = Arc::new(StorageManager::new(bpm.clone()));
     let tm = Arc::new(TransactionManager::new());
-    let cm = Arc::new(CatalogManager::new(sm.clone(), tm.clone()));
-    
+    let cm = Arc::new(CatalogManager::new(sm.clone(), tm.clone()).unwrap()); // TODO: handle error
+    let bpm_exit = bpm.clone();
     // On first inicalization we create system catalogs and run startup .rgsql scripts.
-    let db_inicialization = cm.bootstrap_system_catalogs();
+    let db_inicialization = cm.bootstrap_system_catalogs().unwrap();
     if db_inicialization {
         let engine = ExecutionEngine::new(bpm.clone(), sm.clone(), tm.clone(), cm.clone());
-        run_bootstrap_scripts(&engine, "src/utils/rgsql_scripts/bootstrap");
+        match run_bootstrap_scripts(&engine, "src/utils/rgsql_scripts/bootstrap") {
+            Ok(()) => println!("Bootstrap scripts executed successfully."),
+            Err(e) => eprintln!("Error during bootstrap script execution: {}", e),
+        }
     };
     println!("System catalogs initialized.");
+
+    let (tx, rx) = mpsc::channel::<()>(); // channel for signaling server shutdown
+    let tx_loop = tx.clone();
 
     let listener = TcpListener::bind("127.0.0.1:8080").expect("Perhaps port 8080 is already in use?");
     println!("Server listening on http://127.0.0.1:8080");
 
-    // handle incoming connections in a loop
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let bpm_c = bpm.clone();
-                let sm_c = sm.clone();
-                let tm_c = tm.clone();
-                let cm_c = cm.clone();
+    thread::spawn(move || {
+        // handle incoming connections in a loop
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let bpm_c = bpm.clone();
+                    let sm_c = sm.clone();
+                    let tm_c = tm.clone();
+                    let cm_c = cm.clone();
+                    let tx_conn = tx_loop.clone();
 
-                // spawn new thread for each connection
-                thread::spawn(move || {
-                    handle_connection(stream, bpm_c, sm_c, tm_c, cm_c);
-                });
-            }
-            Err(e) => {
-                eprintln!("Server error when receiving connection: {}", e);
+                    // spawn new thread for each connection
+                    thread::spawn(move || {
+                        handle_connection(stream, bpm_c, sm_c, tm_c, cm_c, tx_conn);
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Server error when receiving connection: {}", e);
+                }
             }
         }
-    }
+    });
+
+    // Main thread exit
+    let _ = rx.recv(); // wait for shutdown signal from connection handler
+    bpm_exit.flush_all().expect("Failed to flush buffer pool before shutdown"); // flush all dirty pages to disk before shutdown
+    println!("Server is shutting down.");
+    restart_server_process();
 }
 
 /// Handle a single client connection: read the request, execute the SQL, and send back the response.
@@ -60,11 +78,12 @@ fn handle_connection(
     sm: Arc<StorageManager>,
     tm: Arc<TransactionManager>,
     cm: Arc<CatalogManager>,
-) {
+    tx: mpsc::Sender<()>,
+) -> Option<()> {
     let mut buffer = [0; 2048];
     if let Err(e) = stream.read(&mut buffer) {
         eprintln!("Server error when reading from stream: {}", e);
-        return;
+        return Some(());
     }
     let request = String::from_utf8_lossy(&buffer[..]);
     
@@ -75,7 +94,7 @@ fn handle_connection(
             
             if sql_query.is_empty() {
                 send_http_error(&mut stream, "Server received empty SQL query.");
-                return;
+                return Some(());
             }
 
             println!("Server recieved SQL query: \"{}\"", sql_query);
@@ -86,22 +105,27 @@ fn handle_connection(
                 Ok(statement) => {
                     let engine = ExecutionEngine::new(bpm.clone(), sm.clone(), tm.clone(), cm.clone());
 
-                    let xid = tm.begin(); // begin a transaction
+                    let xid = tm.begin().unwrap(); // begin a transaction TODO: handle error
                     transaction::context::set_current_xid(xid); // save xid in thread-local context
 
                     let (rezultati, izhodna_shema) = 
                         match engine.execute_statement(statement) {
                             Ok((res, shema)) => (res, shema),
                             Err(e) => {
-                                tm.abort(xid);
+                                tm.abort(xid).unwrap();
                                 send_http_error(&mut stream, &format!("Execution Error: {}", e));
-                                return;
+                                return Some(());
                             }
                         };
-                    
-                    tm.commit(xid);
+                        if let Some(e) = get_thread_error() {
+                            tm.abort(xid).unwrap();
+                            send_http_error(&mut stream, &format!("Critical Storage Error: {}. Restarting server...", e));
+                            let _ = tx.send(()); // send signal to main thread to restart the server
+                            return None; // terminates the current connection thread without sending a response.
+                        };
+                    tm.commit(xid).map_err(|_| trigger_server_restart(tx.clone())).unwrap();
                     transaction::context::clear_current_xid(); // clear xid from thread-local context
-                    bpm.flush_all(); // tehnically we should only flush on program exit (this is here for testing)
+                    bpm.flush_all().unwrap(); // TODO: handle error, tehnically we should only flush on program exit (this is here for testing)
 
                     let json_output = WebTranslator::to_web_json(&izhodna_shema, &rezultati);
 
@@ -133,6 +157,7 @@ fn handle_connection(
     }
     
     let _ = stream.flush();
+    Some(())
 }
 
 fn send_http_error(stream: &mut TcpStream, error_msg: &str) {
@@ -152,68 +177,25 @@ fn send_http_error(stream: &mut TcpStream, error_msg: &str) {
     let _ = stream.write_all(response.as_bytes());
 }
 
-/// Additional scripts for inicialization.
-// fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
-//     use std::fs;
-//     let path = std::path::Path::new(folder_path);
-//     if !path.is_dir() { return; }
-//     if let Ok(entries) = fs::read_dir(path) {
-//         for entry in entries.flatten() {
-//             let path = entry.path();
-//             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
-//                 let code = fs::read_to_string(&path).unwrap();
-//                 let mut parser = SQLParser::new(&code);
-//                 match parser.parse_script() {
-//                     Ok(statements) => {
-//                         for statement in statements {
-//                             let xid = engine.tm.begin();
-//                             match engine.execute_statement(statement, xid) {
-//                                 Ok(_) => {
-//                                     // 3. Commit
-//                                     engine.tm.commit(xid);
-//                                 },
-//                                 Err(e) => {
-//                                     // 4. Abort ob napaki
-//                                     engine.tm.abort(xid);
-//                                     eprintln!("[Bootstrap] Napaka pri ukazu v {}: {}", path.display(), e);
-//                                     break;
-//                                 }
-//                             }
-//                         }
-//                         println!("[Bootstrap] USPEH ({})", path.display());
-//                     }
-//                     Err(e) => eprintln!("[Bootstrap] Parser error v {}: {}", path.display(), e),
-//                 }
-//             }
-//         }
-//     }
-// }
-
-
-
-// --- THIS VERSION BELOW IS better, but currently heap scan doesn't know its own transaction id, and 
-//     it can not see changes made in its transaction. We shouldn't just add xid to heap scan as it is wasteful,
-//     perhaps we should somehow get it to snapshot.
-
-fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
+fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) -> Result<(), RGE> {
     use std::fs;
     let path = std::path::Path::new(folder_path);
-    if !path.is_dir() { return; }
+    if !path.is_dir() { panic!(); }
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rgsql") {
                 println!("[Bootstrap] Running script: {}", path.display());
                 let code = fs::read_to_string(&path).unwrap();
-                let xid = engine.tm.begin(); // each file gets its own transaction id.
+                let xid = engine.tm.begin()?; // each file gets its own transaction id.
                 transaction::context::set_current_xid(xid);
                 match engine.run_script_in_transaction(&code, xid) {
                     Ok(_) => {
-                        engine.tm.commit(xid);
+                        engine.tm.commit(xid)?;
                         println!("[Bootstrap] Success ({})", path.display());
                     },
                     Err(err) => {
-                        engine.tm.abort(xid);
+                        engine.tm.abort(xid)?;
                         eprintln!("[Bootstrap] Error ({}): {}", path.display(), err);
                     }
                 }
@@ -221,4 +203,25 @@ fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) {
             }
         }
     }
+    Ok(())
+}
+
+fn restart_server_process() -> ! {
+    use std::process::Command;
+    use std::os::unix::process::CommandExt; // Works on Linux / macOS
+
+    println!("Restarting process ...");
+
+    let args: Vec<String> = std::env::args().collect();
+    let current_exe = std::env::current_exe().expect("Failed to get current exe path");
+
+    let error = Command::new(current_exe)
+        .args(&args[1..])
+        .exec();
+
+    panic!("CRITICAL: Failed to execute server restart: {}", error);
+}
+fn trigger_server_restart(tx: mpsc::Sender<()>) -> RGE {
+    let _ = tx.send(());
+    RGE::Execution("Critical system error triggered database restart.".to_string())
 }

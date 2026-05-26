@@ -4,7 +4,7 @@ use std::sync::RwLock;
 use crate::access::transaction::clog::{CLog, XidStatus};
 use crate::common::constants::CLOG_FILE_PATH;
 use crate::common::types::TransactionId;
-
+use crate::utils::debug::errors::LockError;
 /// TransactionManager is responsible for managing transaction lifecycles, tracking active transactions, 
 /// and determining visibility of transactions to ensure ACID properties.
 pub struct TransactionManager { 
@@ -27,59 +27,62 @@ impl TransactionManager {
     }
 
     /// Begin a new transaction and return its TransactionID (XID).
-    pub fn begin(&self) -> TransactionId {
+    pub fn begin(&self) -> Result<TransactionId, LockError> {
         let xid = self.next_xid.fetch_add(1, Ordering::SeqCst);
-        let mut active = self.active_xids.write().unwrap();
+        let mut active = self.active_xids.write().map_err(|_| LockError)?;
         active.insert(xid);
-        xid
+        Ok(xid)
     }
 
     /// Mark a transaction as successfully completed.
-    pub fn commit(&self, xid: TransactionId) {
+    pub fn commit(&self, xid: TransactionId) -> Result<(), LockError> {
         {
-            let mut clog = self.clog.write().unwrap();
+            let mut clog = self.clog.write().map_err(|_| LockError)?;
             clog.set_status(xid, XidStatus::Committed);
             clog.flush(); // TODO: decide when to flush CLOG to disk for durability
         }
-        let mut active = self.active_xids.write().unwrap();
+        let mut active = self.active_xids.write().map_err(|_| LockError)?;
         active.remove(&xid);
+        Ok(())
     }
 
     /// Cancels a transaction, prevents commit and makes it invisible to others.
-    pub fn abort(&self, xid: TransactionId) {
+    pub fn abort(&self, xid: TransactionId) -> Result<(), LockError> {
         {
-            let mut clog = self.clog.write().unwrap();
+            let mut clog = self.clog.write().map_err(|_| LockError)?;
             clog.set_status(xid, XidStatus::Aborted);
         }
-        let mut active = self.active_xids.write().unwrap();
+        let mut active = self.active_xids.write().map_err(|_| LockError)?;
         active.remove(&xid);
+        Ok(())
     }
 
-    /// Make CLOG flush its data to disk.
-    pub fn flush(&self) {
-        let clog = self.clog.read().unwrap();
+        /// Make CLOG flush its data to disk.
+        pub fn flush(&self) -> Result<(), LockError> {
+        let clog = self.clog.read().map_err(|_| LockError)?;
         clog.flush();
+        Ok(())
     }
 
     /// Check if a given XID is visible to a given snapshot.
-    pub fn is_visible(&self, xid: TransactionId, snapshot: &Snapshot) -> bool {
-        if xid == 0 { return true; } // system transactions are always visible
+    pub fn is_visible(&self, xid: TransactionId, snapshot: &Snapshot) -> Result<bool, LockError> {
+        if xid == 0 { return Ok(true); } // system transactions are always visible
  
-        if xid >= snapshot.max_xid { return false; } // future transactions are not visible
+        if xid >= snapshot.max_xid { return Ok(false); } // future transactions are not visible
         if snapshot.active_at_start.contains(&xid) {
-            return false; // transactions active at the start of the snapshot are not visible
+            return Ok(false); // transactions active at the start of the snapshot are not visible
         }
-        let clog = self.clog.read().unwrap();
-        clog.get_status(xid) == XidStatus::Committed // only committed transactions are visible
+        let clog = self.clog.read().map_err(|_| LockError)?;
+        Ok(clog.get_status(xid) == XidStatus::Committed) // only committed transactions are visible
     }
 
     /// Creates current snapshot of the transaction state.
-    pub fn get_snapshot(&self) -> Snapshot {
-        let active = self.active_xids.read().unwrap();
-        Snapshot {
+    pub fn get_snapshot(&self) -> Result<Snapshot, LockError> {
+        let active = self.active_xids.read().map_err(|_| LockError)?;
+        Ok(Snapshot {
             max_xid: self.next_xid.load(Ordering::SeqCst),
             active_at_start: active.clone(),
-        }
+        })
     }
 }
 

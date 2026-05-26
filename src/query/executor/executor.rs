@@ -1,3 +1,4 @@
+use std::fmt::Result;
 use std::sync::{Arc, RwLock};
 use crate::storage::buffer::manager::BufferPoolManager;
 use crate::storage::disk::manager::Table;
@@ -13,9 +14,10 @@ use crate::access::heap::access::HeapAccess;
 use crate::catalog::types::DataType;
 use crate::access::tuple;
 use std::cmp::Ordering;
+use crate::utils::debug::errors::{RustgressError as RGE};
 
 pub trait Executor { // Volcano iterator model
-    fn init(&mut self);
+    fn init(&mut self) -> std::result::Result<(), RGE>;
     fn next(&mut self) -> Option<HeapTuple>;
     fn get_tuple_desc(&self) -> Arc<TupleDescriptor>; // schema of output tuples
 }
@@ -50,12 +52,14 @@ impl SeqScanExecutor {
 }
 
 impl Executor for SeqScanExecutor {
-    fn init(&mut self) { // inicialization of iterator
-        self.scan = Some(HeapScan::new(
+    fn init(&mut self) -> std::result::Result<(), RGE> { // inicialization of iterator
+        let scan = HeapScan::new(
             self.bpm.clone(),
             self.table_handle.clone(),
             self.tm.clone(),
-        ));
+        )?;
+        self.scan = Some(scan);
+        Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> { // next tuple from iterator
         if let Some(ref mut scan_iter) = self.scan {
@@ -246,8 +250,9 @@ impl FilterExecutor {
 }
 
 impl Executor for FilterExecutor {
-    fn init(&mut self) {
+    fn init(&mut self) -> std::result::Result<(), RGE> {
         self.child.init();
+        Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
         let desc = self.child.get_tuple_desc();
@@ -291,8 +296,9 @@ impl ProjectionExecutor {
 }
 
 impl Executor for ProjectionExecutor {
-    fn init(&mut self) {
+    fn init(&mut self) -> std::result::Result<(), RGE> {
         self.child.init();
+        Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
         if let Some(child_tuple) = self.child.next() {
@@ -334,9 +340,10 @@ impl LimitExecutor {
 }
 
 impl Executor for LimitExecutor {
-    fn init(&mut self) {
+    fn init(&mut self) -> std::result::Result<(), RGE> {
         self.child.init();
         self.cursor = 0;
+        Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
         if self.cursor >= self.limit {
@@ -397,8 +404,8 @@ impl SortExecutor {
 }
 
 impl Executor for SortExecutor {
-    fn init(&mut self) {
-        self.child.init();
+    fn init(&mut self) -> std::result::Result<(), RGE> {
+        self.child.init()?;
         self.sorted_tuples.clear();
         self.cursor = 0;
         let desc = self.child.get_tuple_desc();
@@ -441,6 +448,7 @@ impl Executor for SortExecutor {
 
             Ordering::Equal // Če so vsi stolpci enaki
         });
+        Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
         if self.cursor < self.sorted_tuples.len() {
@@ -479,7 +487,7 @@ impl ExecutionEngine {
 
     /// Creates an execution plan and executes the query.
     pub fn execute_statement(&self, statement: SQLStatement) 
-        -> Result<(Vec<Vec<Value>>, Arc<TupleDescriptor>), String> {
+        -> std::result::Result<(Vec<Vec<Value>>, Arc<TupleDescriptor>), RGE> {
         match statement {
             // =========================================================================
             // 1. SELECT
@@ -491,11 +499,10 @@ impl ExecutionEngine {
                 order_by,
                 limit,
             } => {
-                let table_oid = self.cm.get_table_oid(&table_name)
-                    .ok_or_else(|| format!("Table '{}' not found!", table_name))?;
+                let table_oid = self.cm.get_table_oid(&table_name)?;
 
-                let schema = Arc::new(self.cm.get_schema(table_oid)); // get table schema
-                let table_handle = self.sm.get_table(table_oid); // get table access handle
+                let schema = Arc::new(self.cm.get_schema(table_oid)?); // get table schema
+                let table_handle = self.sm.get_table(table_oid)?; // get table access handle
 
                 // Each next plan wraps the previous one, so we build it from the bottom up.
                 let mut plan: Box<dyn Executor> = Box::new(SeqScanExecutor::new(
@@ -546,9 +553,8 @@ impl ExecutionEngine {
             columns: _, 
             values,
         } => {
-            let table_oid = self.cm.get_table_oid(&table_name).
-                ok_or_else(|| format!("Table '{}' not found!", table_name))?;
-            let schema = Arc::new(self.cm.get_schema(table_oid));
+            let table_oid = self.cm.get_table_oid(&table_name)?;
+            let schema = Arc::new(self.cm.get_schema(table_oid)?);
             let mut inserted_count = 0; // for reporting only
             for row in values {
                 let mut row_values = Vec::new();
@@ -585,20 +591,15 @@ impl ExecutionEngine {
             columns,
             if_not_exists,
         } => {
-            let existing_oid = self.cm.get_table_oid(&name);
-            if existing_oid.is_some() {
-                if if_not_exists {
-                    // Report back that table already exists
-                    let out_desc = Arc::new(TupleDescriptor::new(vec![
-                        tuple::desc::Column {
-                            name: "CREATE_TABLE".to_string(),
-                            data_type: DataType::Varchar(264),
-                        }
-                    ]));
-                    return Ok((vec![vec![Value::Varchar(format!("Table {} already exists, skipping.", name))]], out_desc));
-                } else {
-                    return Err(format!("Table '{}' already exists!", name));
-                }
+            let existing_oid = self.cm.get_table_oid(&name)?;
+            if if_not_exists {
+                let out_desc = Arc::new(TupleDescriptor::new(vec![
+                    tuple::desc::Column {
+                        name: "CREATE_TABLE".to_string(),
+                        data_type: DataType::Varchar(264),
+                    }
+                ]));
+                return Ok((vec![vec![Value::Varchar(format!("Table {} already exists, skipping.", name))]], out_desc));
             }
             // This could also be a helper function
             let mut catalog_columns = Vec::new();
@@ -618,7 +619,7 @@ impl ExecutionEngine {
                 });
             }
             let new_table_schema = TupleDescriptor::new(catalog_columns); // create table schema
-            let new_oid = self.cm.create_table(&name, 0, &new_table_schema);
+            let new_oid = self.cm.create_table(&name, 0, &new_table_schema)?;
             // Report back with a message:
             let out_desc = Arc::new(TupleDescriptor::new(vec![
                 tuple::desc::Column {
@@ -640,16 +641,11 @@ impl ExecutionEngine {
             name,
             if_exists,
         } => {
-            let success = self.cm.drop_table(&name);
-
-            let message = if success {
-                format!("Table {} dropped successfully.", name)
-            } else {
-                if if_exists {
-                    format!("Table {} does not exist, skipping.", name)
-                } else {
-                    return Err(format!("Can not drop non existent table '{}'!", name));
-                }
+            let success = self.cm.drop_table(&name)?;
+            let message = match success {
+                true => format!("Table '{}' dropped successfully.", name),
+                false if if_exists => format!("Table '{}' does not exist, ignorring.", name),
+                false => format!("Table '{}' does not exist!", name),
             };
             let out_desc = Arc::new(TupleDescriptor::new(vec![
                 tuple::desc::Column {
@@ -668,10 +664,9 @@ impl ExecutionEngine {
             table_name,
             where_clause,
         } => {
-            let table_oid = self.cm.get_table_oid(&table_name).
-                ok_or_else(|| format!("Table '{}' not found!", table_name))?;
-            let schema = Arc::new(self.cm.get_schema(table_oid));
-            let table_handle = self.sm.get_table(table_oid);
+            let table_oid = self.cm.get_table_oid(&table_name)?;
+            let schema = Arc::new(self.cm.get_schema(table_oid)?);
+            let table_handle = self.sm.get_table(table_oid)?;
 
             // build a plan first
             let mut plan: Box<dyn Executor> = Box::new(SeqScanExecutor::new(
@@ -699,7 +694,7 @@ impl ExecutionEngine {
                     self.sm.clone(),
                     table_oid,
                     rid
-                );
+                )?;
                 if success {
                     deleted_count += 1;
                 }
@@ -722,10 +717,9 @@ impl ExecutionEngine {
             assignments,
             where_clause,
         } => {
-            let table_oid = self.cm.get_table_oid(&table_name).
-                ok_or_else(|| format!("Table '{}' not found!", table_name))?;
-            let schema = Arc::new(self.cm.get_schema(table_oid));
-            let table_handle = self.sm.get_table(table_oid);
+            let table_oid = self.cm.get_table_oid(&table_name)?;
+            let schema = Arc::new(self.cm.get_schema(table_oid)?);
+            let table_handle = self.sm.get_table(table_oid)?;
             let mut plan: Box<dyn Executor> = Box::new(SeqScanExecutor::new(
                 self.bpm.clone(),
                 self.tm.clone(),
@@ -794,7 +788,7 @@ impl ExecutionEngine {
 }
 
 impl ExecutionEngine {
-    pub fn run_script_in_transaction(&self, code: &str, xid: TransactionId) -> Result<(), String> {
+    pub fn run_script_in_transaction(&self, code: &str, xid: TransactionId) -> std::result::Result<(), RGE> {
         let mut parser = SQLParser::new(code);
         let statements = parser.parse_script()?;
         for stmt in statements {
