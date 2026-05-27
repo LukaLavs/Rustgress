@@ -24,7 +24,6 @@ SELECT * FROM rg_attribute ORDER BY atttypid DESC
 UPDATE users SET ime = 'Gasper II.' WHERE id = 1002
 SELECT * FROM usa_state_info where state < 'G' and illiteracy > 1.01 order by frost asc, illiteracy asc
 SELECT * FROM usa_state_info where population < income
-SELECT * FROM usa_state_info where income / 2 < 1900 - 200 + frost order by income desc
 ```
 
 
