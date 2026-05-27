@@ -98,7 +98,7 @@ impl<'a> Iterator for HeapScan {
                 let table_oid = table_guard.oid;
                 drop(table_guard);
                 let tag = BufferTag {
-                    table_oid: table_oid, // critical error if lock is poisoned.
+                    table_oid: table_oid,
                     page_idx: self.current_page_idx,
                 };
                 let Some(mut table_write) = Self::unpack_static(self.table.write().map_err(|_| LockError)) 
@@ -108,7 +108,10 @@ impl<'a> Iterator for HeapScan {
                 drop(table_write);
                 self.active_frame = Some(fetched_page);
             };
-            let frame = self.active_frame.as_ref().unwrap(); // critical
+            let Some(ref frame) = self.active_frame else {
+                set_thread_error(AccessError::Lock(LockError));
+                return None;
+            };
             let Some(data_lock) = Self::unpack_static(frame.data.read().map_err(|_| LockError)) 
                 else { set_thread_error(AccessError::Lock(LockError)); return None; };            
             let Some(page) = Self::unpack_static(Page::from_bytes(&data_lock.data)) 
@@ -125,6 +128,9 @@ impl<'a> Iterator for HeapScan {
             while self.current_slot_idx <= num_slots {
                 let slot = self.current_slot_idx;
                 self.current_slot_idx += 1;
+                if let Some(item_id) = page.get_item_id(slot) {
+                    if item_id.is_unused() || item_id.is_dead() { continue; }
+                    } else { continue; }
                 if let Some(raw_tuple_bytes) = page.get_item(slot) {
                     let mut view = HeapTupleView::new(raw_tuple_bytes);
                     let t_xmax = view.header.t_xmax;
@@ -144,7 +150,8 @@ impl<'a> Iterator for HeapScan {
             // finnished with this page, move onto the next
             let buf_id = frame.id;
             drop(data_lock); // drop lock to enable unpinning
-            self.bpm.unpin_page(buf_id);
+            let Some(()) = Self::unpack_static(self.bpm.unpin_page(buf_id)) 
+                else { set_thread_error(AccessError::Lock(LockError)); return None; };
             self.active_frame = None;
             self.current_page_idx += 1;
             self.current_slot_idx = 1;
@@ -157,7 +164,8 @@ impl<'a> Iterator for HeapScan {
 impl Drop for HeapScan {
     fn drop(&mut self) {
         if let Some(frame) = &self.active_frame {
-            self.bpm.unpin_page(frame.id);
+            let Some(()) = Self::unpack_static(self.bpm.unpin_page(frame.id)) 
+                else { set_thread_error(AccessError::Lock(LockError)); return; };
         }
     }
 }

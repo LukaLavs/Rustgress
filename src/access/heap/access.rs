@@ -50,17 +50,17 @@ impl HeapAccess {
 
         match frame_data.heap_add_tuple(tuple) {
             Ok(slot_num) => {
-                bpm.mark_dirty(frame.id);
+                bpm.mark_dirty(frame.id)?;
                 let rid = RowId { page_id, slot_num };
                 drop(frame_data);
-                bpm.unpin_page(frame.id);
+                bpm.unpin_page(frame.id)?;
                 return Ok(rid);
             },
             Err(_err) => (), // we will extend the file with a new page
         };
         // If there is no space on the current page, we need to add a new page
         drop(frame_data);
-        bpm.unpin_page(frame.id);
+        bpm.unpin_page(frame.id)?;
         
         let (new_frame, new_page_id) = Self::append_new_page(bpm.clone(), &mut t_lock, table_oid)?;
         let mut new_frame_data = new_frame.data.write().map_err(|_| LockError)?;
@@ -69,10 +69,10 @@ impl HeapAccess {
         tuple.header.t_ctid_slot = 1;
 
         let slot_num = new_frame_data.heap_add_tuple(tuple)?; // Here ideally we should have TOAST functionality currently critical
-        bpm.mark_dirty(new_frame.id);
+        bpm.mark_dirty(new_frame.id)?;
         let rid = RowId { page_id: new_page_id, slot_num };
         drop(new_frame_data);
-        bpm.unpin_page(new_frame.id);
+        bpm.unpin_page(new_frame.id)?;
         
         Ok(rid)
     }
@@ -106,11 +106,11 @@ impl HeapAccess {
         let mut t_lock = table.write().map_err(|_| LockError)?;
         let frame = bpm.fetch_page(tag, &mut t_lock)?;
         let mut frame_data = frame.data.write().map_err(|_| LockError)?;
-        frame_data.heap_set_xmax(rid.slot_num, xid as u32); // TODO: Here we dont need to mark dirty if page invissible.
-        bpm.mark_dirty(frame.id);
+        frame_data.heap_set_xmax(rid.slot_num, xid as u32)?; // TODO: Here we dont need to mark dirty if page invissible.
+        bpm.mark_dirty(frame.id)?;
         
         drop(frame_data);
-        bpm.unpin_page(frame.id);
+        bpm.unpin_page(frame.id)?;
 
         Ok(true)
     }
@@ -130,7 +130,7 @@ impl HeapAccess {
             panic!("Update failed: could not find old tuple at {:?}", rid);
         }
         let new_rid = Self::insert(storage.clone(), table_oid, new_tuple)?;
-        Self::link_tuples(storage, table_oid, rid, new_rid); // TODO: Check if t_ctid needs update
+        Self::link_tuples(storage, table_oid, rid, new_rid)?; // TODO: Check if t_ctid needs update
         Ok(new_rid)
     }
 
@@ -145,9 +145,9 @@ impl HeapAccess {
         let frame = bpm.fetch_page(tag, &mut t_lock)?;
         let mut page = frame.data.write().map_err(|_| LockError)?;
 
-        page.heap_set_ctid(old_rid.slot_num, new_rid);
-        bpm.mark_dirty(frame.id);
-        bpm.unpin_page(frame.id);
+        page.heap_set_ctid(old_rid.slot_num, new_rid)?;
+        bpm.mark_dirty(frame.id)?;
+        bpm.unpin_page(frame.id)?;
         Ok(())
     }
 }

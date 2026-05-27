@@ -42,7 +42,7 @@ impl Page {
         self.data[..bytes.len()].copy_from_slice(bytes);
     }
 
-    pub(crate) fn get_free_space(&self) -> Result<usize, PageError> {
+    fn get_free_space(&self) -> Result<usize, PageError> {
         let h = self.get_header()?;
         Ok((h.pd_upper.saturating_sub(h.pd_lower)) as usize)
     }
@@ -62,7 +62,7 @@ impl Page { // Item managment methods.
         (header_size + (slot_num as usize - 1) * item_id_size, item_id_size)
     }
 
-    fn get_item_id(&self, slot_num: OffsetNumber) -> Option<ItemIdData> {
+    pub(crate) fn get_item_id(&self, slot_num: OffsetNumber) -> Option<ItemIdData> {
         let (offset, item_size) = Page::slot_offset(slot_num);
         let header = self.get_header().ok()?;
         if slot_num == 0 { return None; }
@@ -188,9 +188,9 @@ impl Page { // Cleanup and compaction methods. Used mainly by VACCUM.
                     let start = item_id.lp_off() as usize;
                     let end = start + item_id.lp_len() as usize;
                     let tuple_data = &self.data[start..end];
-                    new_page.add_item::<&[u8]>(&tuple_data);
+                    new_page.add_item::<&[u8]>(&tuple_data)?;
                 } else {
-                    new_page.add_empty_slot(); // we must keep the same slot numbers to maintain RowIds.
+                    new_page.add_empty_slot()?; // we must keep the same slot numbers to maintain RowIds.
                 }
             }
         }

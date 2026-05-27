@@ -14,7 +14,15 @@ use rustgress::query::json::translator::WebTranslator;
 use rustgress::access::transaction;//context::{set_current_xid, clear_current_xid};
 use rustgress::utils::debug::errors::{RustgressError as RGE};
 use std::sync::mpsc;
-use rustgress::access::transaction::context::{clear_current_xid, get_thread_error, set_current_xid};
+use rustgress::access::transaction::context::{get_thread_error};
+use ctrlc;
+use rustgress::access::heap::vaccum::Vacuum;
+
+#[derive(Debug, PartialEq)]
+enum ServerSignal {
+    Restart,
+    Shutdown,
+}
 
 fn main() {
     println!("Rustgress Server has Started!");
@@ -24,6 +32,8 @@ fn main() {
     let tm = Arc::new(TransactionManager::new());
     let cm = Arc::new(CatalogManager::new(sm.clone(), tm.clone()).unwrap()); // TODO: handle error
     let bpm_exit = bpm.clone();
+    let tm_exit = tm.clone();
+    let sm_exit = sm.clone();
     // On first inicalization we create system catalogs and run startup .rgsql scripts.
     let db_inicialization = cm.bootstrap_system_catalogs().unwrap();
     if db_inicialization {
@@ -35,8 +45,14 @@ fn main() {
     };
     println!("System catalogs initialized.");
 
-    let (tx, rx) = mpsc::channel::<()>(); // channel for signaling server shutdown
+    let (tx, rx) = mpsc::channel::<ServerSignal>(); // channel for signaling server shutdown
     let tx_loop = tx.clone();
+    let tx_ctrlc = tx.clone();
+
+    ctrlc::set_handler(move || {
+        println!("Shutdown signal received, shutting down server...");
+        let _ = tx_ctrlc.send(ServerSignal::Shutdown);
+    }).expect("Error setting Ctrl-C handler");
 
     let listener = TcpListener::bind("127.0.0.1:8080").expect("Perhaps port 8080 is already in use?");
     println!("Server listening on http://127.0.0.1:8080");
@@ -65,10 +81,24 @@ fn main() {
     });
 
     // Main thread exit
-    let _ = rx.recv(); // wait for shutdown signal from connection handler
-    bpm_exit.flush_all().expect("Failed to flush buffer pool before shutdown"); // flush all dirty pages to disk before shutdown
-    println!("Server is shutting down.");
-    restart_server_process();
+    let signal = rx.recv().unwrap_or(ServerSignal::Shutdown); // wait for shutdown signal from connection handler
+    if signal == ServerSignal::Shutdown {
+        println!("Performing system maintenance before shutdown...");
+        let vacuum = Vacuum::new(bpm_exit.clone(), tm_exit.clone(), sm_exit.clone());
+        match vacuum.vacuum_all_tables() {
+            Ok(()) => println!("Cluster-wide vacuum completed successfully."),
+            Err(e) => eprintln!("Cluster-wide vacuum failed: {:?}", e),
+        };
+        match bpm_exit.clone().flush_all() {
+            Ok(()) => println!("Buffer pool flushed successfully."),
+            Err(e) => eprintln!("Failed to flush buffer pool: {:?}", e),
+        }
+        std::process::exit(0);
+    } else { // ServerSignal::Restart
+        bpm_exit.clone().flush_all().expect("Failed to flush buffer pool before restart");
+        println!("Server is restarting due to critical error.");
+        restart_server_process();
+    }
 }
 
 /// Handle a single client connection: read the request, execute the SQL, and send back the response.
@@ -78,7 +108,7 @@ fn handle_connection(
     sm: Arc<StorageManager>,
     tm: Arc<TransactionManager>,
     cm: Arc<CatalogManager>,
-    tx: mpsc::Sender<()>,
+    tx: mpsc::Sender<ServerSignal>,
 ) -> Option<()> {
     let mut buffer = [0; 2048];
     if let Err(e) = stream.read(&mut buffer) {
@@ -118,14 +148,13 @@ fn handle_connection(
                             }
                         };
                         if let Some(e) = get_thread_error() {
-                            tm.abort(xid).unwrap();
-                            send_http_error(&mut stream, &format!("Critical Storage Error: {}. Restarting server...", e));
-                            let _ = tx.send(()); // send signal to main thread to restart the server
+                            let aborted = tm.abort(xid).is_ok();
+                            send_http_error(&mut stream, &format!("Critical Storage Error: {}. Transaction aborted: {}", e, aborted));
+                            trigger_server_restart(tx.clone()); // send signal to main thread to restart the server
                             return None; // terminates the current connection thread without sending a response.
                         };
                     tm.commit(xid).map_err(|_| trigger_server_restart(tx.clone())).unwrap();
                     transaction::context::clear_current_xid(); // clear xid from thread-local context
-                    bpm.flush_all().unwrap(); // TODO: handle error, tehnically we should only flush on program exit (this is here for testing)
 
                     let json_output = WebTranslator::to_web_json(&izhodna_shema, &rezultati);
 
@@ -189,7 +218,7 @@ fn run_bootstrap_scripts(engine: &ExecutionEngine, folder_path: &str) -> Result<
                 let code = fs::read_to_string(&path).unwrap();
                 let xid = engine.tm.begin()?; // each file gets its own transaction id.
                 transaction::context::set_current_xid(xid);
-                match engine.run_script_in_transaction(&code, xid) {
+                match engine.run_script_in_transaction(&code) {
                     Ok(_) => {
                         engine.tm.commit(xid)?;
                         println!("[Bootstrap] Success ({})", path.display());
@@ -221,7 +250,6 @@ fn restart_server_process() -> ! {
 
     panic!("CRITICAL: Failed to execute server restart: {}", error);
 }
-fn trigger_server_restart(tx: mpsc::Sender<()>) -> RGE {
-    let _ = tx.send(());
-    RGE::Execution("Critical system error triggered database restart.".to_string())
+fn trigger_server_restart(tx: mpsc::Sender<ServerSignal>) {
+    let _ = tx.send(ServerSignal::Restart);
 }

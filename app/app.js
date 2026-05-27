@@ -212,7 +212,32 @@ const html = `
 <div id="toast" class="toast">Copied to clipboard</div>
 
 <script>
-    let tabs = [{query: "SELECT oid, relname FROM rg_class LIMIT 5", result: null}];
+    let tabs = [
+         {
+             query: \`SELECT * FROM starwars 
+WHERE height != 172 
+AND hair_color = 'brown' 
+AND species = 'Human' 
+AND height/2 + 100 > mass 
+ORDER BY height DESC;\`, 
+             result: null
+         },
+        {
+             query: "SELECT oid, relname FROM rg_class LIMIT 5;", 
+             result: null
+         },
+         {
+             query: "CREATE TABLE users (id INT, ime VARCHAR, aktiven BOOLEAN);", 
+             result: null
+         },
+         {
+             query: "INSERT INTO users VALUES (1, 'Luka', true), (2, 'Valentin', false);", 
+             result: null},
+        {
+             query: "UPDATE users SET aktiven = false WHERE id = 1;", 
+             result: null
+         }
+     ];
     let currentTabIdx = 0;
     let historyData = [];
 

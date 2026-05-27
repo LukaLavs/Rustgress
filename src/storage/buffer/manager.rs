@@ -97,7 +97,7 @@ impl BufferPoolManager {
         { // load page from disk
             let mut page_lock = frame.data.write()
                 .map_err(|_| LockError)?;
-            let raw_data = table.read_page_raw(tag.page_idx)?;
+            let raw_data = table.read_page(tag.page_idx)?.data;
             page_lock.data.copy_from_slice(&raw_data);
             if !page_lock.checksum_verified()? {
                 return Err(BufferPoolError::ChecksumFailed { page_id: tag.page_idx, table_oid: tag.table_oid });
@@ -175,8 +175,9 @@ impl BufferPoolManager {
             if let Some(tag) = *tag_lock {
                 let mut data_write = frame.data.write()
                     .map_err(|_| LockError)?;
-                data_write.update_checksum(); // update checksum before writing
-                table.write_page_raw(tag.page_idx, &data_write.data);
+                data_write.update_checksum()?; // update checksum before writing
+                let page = Page::from_bytes(&data_write.data)?;
+                table.write_page(tag.page_idx, &page)?;
                 *dirty = false;
                 println!("FLUSSHED.");
             }
@@ -205,7 +206,8 @@ impl BufferPoolManager {
             };
             let data_lock = frame.data.read()
                 .map_err(|_| LockError)?;
-            table.write_page_raw(tag.page_idx, &data_lock.data);
+            let page = Page::from_bytes(&data_lock.data)?;
+            table.write_page(tag.page_idx, &page)?;
             *is_dirty = false;
         }
         println!("FLUSSHED ALL.");

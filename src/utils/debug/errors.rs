@@ -1,7 +1,4 @@
-use core::error;
-
 use thiserror::Error;
-
 
 
 #[derive(Error, Debug)]
@@ -84,12 +81,15 @@ pub enum BufferPoolError {
 }
 
 #[derive(Error, Debug)]
-pub enum CatalogError {
+pub enum AccessError {
     #[error(transparent)]
     Disk(#[from] DiskError),
 
     #[error(transparent)]
     Page(#[from] PageError),
+
+    #[error("Buffer pool error: {0}")]
+    BufferPool(#[from] BufferPoolError),
 
     #[error("Concurrency error: {0}")]
     Lock(#[from] LockError),
@@ -102,24 +102,9 @@ pub enum CatalogError {
 
     #[error("Failed to create data folder for system catalogs.")]
     DataFolderCreationFailed,
-}
 
-#[derive(Error, Debug)]
-pub enum AccessError {
-    #[error(transparent)]
-    Disk(#[from] DiskError),
-
-    #[error(transparent)]
-    Page(#[from] PageError),
-
-    #[error("Catalog error: {0}")]
-    Catalog(#[from] CatalogError),
-
-    #[error("Buffer pool error: {0}")]
-    BufferPool(#[from] BufferPoolError),
-
-    #[error("Concurrency error: {0}")]
-    Lock(#[from] LockError),
+    #[error("Duplicated table names")]
+    DuplicatedTableNames,
 }
 
 
@@ -136,9 +121,6 @@ pub enum RustgressError {
 
     #[error("Buffer pool error: {0}")]
     BufferPool(#[from] BufferPoolError),
-
-    #[error("Catalog error: {0}")]
-    Catalog(#[from] CatalogError),
 
     #[error("Concurrency lock error: {0}")]
     Lock(#[from] LockError),

@@ -7,7 +7,7 @@ use super::item::ItemIdData;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 
-bitflags! {
+bitflags! { // unused currently, but vaccum should set those flags.
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PageFlags: u16 {
@@ -31,7 +31,7 @@ pub struct PageHeaderData { // 16 bytes
     pub pd_upper: LocationIndex, // offset to end of free space
     pub pd_special: LocationIndex, // offset to start of special space
     pub pd_pagesize_version: PageSizeVersion, // page size and version info
-    pub pd_prune_xid: TransactionId, // oldest prunable transaction
+    pub _pd_prune_xid: TransactionId, // oldest prunable transaction
 }
 
 impl PageHeaderData {
@@ -45,7 +45,7 @@ impl PageHeaderData {
             pd_upper: special_start,
             pd_special: special_start,
             pd_pagesize_version: PAGE_SIZE_VERSION,
-            pd_prune_xid: 0, // prunning not implemented yet
+            _pd_prune_xid: 0, // prunning not implemented yet
         }
     }
 

@@ -1,4 +1,3 @@
-use std::fmt::Result;
 use std::sync::{Arc, RwLock};
 use crate::storage::buffer::manager::BufferPoolManager;
 use crate::storage::disk::manager::Table;
@@ -9,7 +8,6 @@ use crate::access::tuple::tuple::{HeapTuple};
 use crate::catalog::manager::CatalogManager;
 use crate::catalog::types::Value;
 use crate::query::parser::parser::*;
-use crate::common::types::TransactionId;
 use crate::access::heap::access::HeapAccess;
 use crate::catalog::types::DataType;
 use crate::access::tuple;
@@ -251,7 +249,7 @@ impl FilterExecutor {
 
 impl Executor for FilterExecutor {
     fn init(&mut self) -> std::result::Result<(), RGE> {
-        self.child.init();
+        self.child.init()?;
         Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
@@ -297,7 +295,7 @@ impl ProjectionExecutor {
 
 impl Executor for ProjectionExecutor {
     fn init(&mut self) -> std::result::Result<(), RGE> {
-        self.child.init();
+        self.child.init()?;
         Ok(())
     }
     fn next(&mut self) -> Option<HeapTuple> {
@@ -341,7 +339,7 @@ impl LimitExecutor {
 
 impl Executor for LimitExecutor {
     fn init(&mut self) -> std::result::Result<(), RGE> {
-        self.child.init();
+        self.child.init()?;
         self.cursor = 0;
         Ok(())
     }
@@ -532,7 +530,7 @@ impl ExecutionEngine {
                 if let Some(lim_val) = limit {
                     plan = Box::new(LimitExecutor::new(plan, lim_val as usize));
                 }
-                plan.init();
+                plan.init()?;
                 let output_desc = plan.get_tuple_desc();
                 let mut results = Vec::new();
 
@@ -569,7 +567,7 @@ impl ExecutionEngine {
                     row_values.push(val);
                 }
                 let mut tuple = schema.pack(row_values);
-                HeapAccess::insert(self.sm.clone(), table_oid, &mut tuple);
+                HeapAccess::insert(self.sm.clone(), table_oid, &mut tuple)?;
                 inserted_count += 1;
             }
             // Report back with number of inserted rows
@@ -591,15 +589,17 @@ impl ExecutionEngine {
             columns,
             if_not_exists,
         } => {
-            let existing_oid = self.cm.get_table_oid(&name)?;
-            if if_not_exists {
-                let out_desc = Arc::new(TupleDescriptor::new(vec![
-                    tuple::desc::Column {
-                        name: "CREATE_TABLE".to_string(),
-                        data_type: DataType::Varchar(264),
-                    }
-                ]));
-                return Ok((vec![vec![Value::Varchar(format!("Table {} already exists, skipping.", name))]], out_desc));
+            let table_exists = self.cm.get_table_oid(&name).is_ok();
+            if  table_exists {
+                if if_not_exists {
+                    let out_desc = Arc::new(TupleDescriptor::new(vec![
+                        tuple::desc::Column {
+                            name: "CREATE_TABLE".to_string(),
+                            data_type: DataType::Varchar(264),
+                        }
+                    ]));
+                    return Ok((vec![vec![Value::Varchar(format!("Table {} already exists, skipping.", name))]], out_desc));
+                }
             }
             // This could also be a helper function
             let mut catalog_columns = Vec::new();
@@ -678,7 +678,7 @@ impl ExecutionEngine {
             if let Some(where_struct) = where_clause {
                 plan = Box::new(FilterExecutor::new(plan, where_struct.condition));
             }
-            plan.init();
+            plan.init()?;
             let mut rids_to_delete = Vec::new();
             while let Some(tuple) = plan.next() { // gather all RowIds of tuples to delete
                 let page_id = tuple.header.t_ctid_page;
@@ -729,7 +729,7 @@ impl ExecutionEngine {
             if let Some(where_struct) = where_clause {
                 plan = Box::new(FilterExecutor::new(plan, where_struct.condition));
             }
-            plan.init();
+            plan.init()?;
 
             let mut targets = Vec::new();
             while let Some(tuple) = plan.next() {
@@ -763,7 +763,7 @@ impl ExecutionEngine {
                     table_oid,
                     rid,
                     &mut new_tuple
-                );
+                )?;
                 updated_count += 1;
             }
 
@@ -788,7 +788,7 @@ impl ExecutionEngine {
 }
 
 impl ExecutionEngine {
-    pub fn run_script_in_transaction(&self, code: &str, xid: TransactionId) -> std::result::Result<(), RGE> {
+    pub fn run_script_in_transaction(&self, code: &str) -> std::result::Result<(), RGE> {
         let mut parser = SQLParser::new(code);
         let statements = parser.parse_script()?;
         for stmt in statements {

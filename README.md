@@ -9,6 +9,15 @@ The main goal of this project is to build a simplified SQL database that impleme
 Currently working syntax:
 
 ```
+SELECT * from starwars 
+where height != 172 
+and hair_color = 'brown' 
+and species = 'Human' 
+and height/2 + 100 > mass
+order by height desc;
+```
+
+```
 CREATE TABLE users (id INT, ime VARCHAR, aktiven BOOLEAN)
 SELECT * FROM messages WHERE user_id = 1
 INSERT INTO messages VALUES (1000, 'My first message!')

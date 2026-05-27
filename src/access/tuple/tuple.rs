@@ -37,39 +37,6 @@ impl PageItem for HeapTuple {
     }
 }
 
-// pub struct HeapTupleView<'a> {
-//     pub header: HeapTupleHeaderData,
-//     pub raw: &'a [u8], // raw bytes of the entire tuple (header + null bitmap + data)
-// }
-
-// impl<'a> HeapTupleView<'a> {
-//     pub fn new(raw_bytes: &'a [u8]) -> Self {
-//         let (header, _) = 
-//             HeapTupleHeaderData::read_from_prefix(raw_bytes)
-//             .expect("Raw bytes are too small to contain a valid tuple header");
-//         HeapTupleView { header, raw: raw_bytes }
-//     }
-//     pub fn header(&self) -> &HeapTupleHeaderData {
-//         &self.header
-//     }
-//     /// Returns the raw data bytes of the tuple (excluding the header and null bitmap).
-//     pub fn data(&self) -> &[u8] {
-//         &self.raw[self.header.t_hoff as usize..]
-//     }
-//     pub fn null_bitmap(&self) -> Option<&[u8]> {
-//         if !self.header.read_infomask().contains(TupleInfoMask::HEAP_HASNULL) {
-//             return None;
-//         }
-//         let header_size = std::mem::size_of::<HeapTupleHeaderData>();
-//         let hoff = self.header.t_hoff as usize;
-//         if hoff > header_size {
-//             Some(&self.raw[header_size..hoff])
-//         } else {
-//             None
-//         }
-//     }
-// }
-
 pub struct HeapTupleView<'a> {
     pub header: HeapTupleHeaderData,
     pub null_bitmap: &'a [u8],
@@ -95,7 +62,6 @@ impl<'a> HeapTupleView<'a> {
             data,
         }
     }
-
     pub fn data(&self) -> &[u8] { self.data }
     pub fn null_bitmap(&self) -> Option<&[u8]> {
         if self.null_bitmap.is_empty() { None } else { Some(self.null_bitmap) }

@@ -1,12 +1,11 @@
-use crate::common::types::{OffsetNumber};
 use zerocopy_derive::{IntoBytes, FromBytes, Immutable, KnownLayout};
 
 
 pub mod item_id_flags {
     pub const LP_UNUSED: u8 = 0;
     pub const LP_NORMAL: u8 = 1;
-    pub const LP_REDIRECT: u8 = 2;
-    pub const LP_DEAD: u8 = 3;
+    // pub const LP_REDIRECT: u8 = 2;
+    pub const LP_DEAD: u8 = 3; // is used by vaccum (but vaccum is not currently fully functional)
 }
 
 #[repr(transparent)]
@@ -23,30 +22,13 @@ impl ItemIdData {
     pub(crate) fn lp_off(&self) -> u16 { (self.0 & 0x7FFF) as u16 }
     pub(crate) fn lp_flags(&self) -> u8 { ((self.0 >> 15) & 0x3) as u8 }
     pub(crate) fn lp_len(&self) -> u16 { (self.0 >> 17) as u16 }
-    pub(crate) fn set_lp_off(&mut self, off: u16) { self.0 = (self.0 & !0x7FFF) | (off as u32 & 0x7FFF) }
     /// Possible flags: LP_UNUSED, LP_NORMAL, LP_REDIRECT, LP_DEAD.
     pub(crate) fn set_lp_flags(&mut self, flags: u8) { self.0 = (self.0 & !(0x3 << 15)) | ((flags as u32 & 0x3) << 15) }
     /// Length of the tuple data in bytes.
-    pub(crate) fn set_lp_len(&mut self, len: u16) { self.0 = (self.0 & !(0x7FFF << 17)) | ((len as u32 & 0x7FFF) << 17) }
-
     pub(crate) fn is_unused(&self) -> bool { self.lp_flags() == item_id_flags::LP_UNUSED }
-    pub(crate) fn is_normal(&self) -> bool { self.lp_flags() == item_id_flags::LP_NORMAL }
-    pub(crate) fn is_redirect(&self) -> bool { self.lp_flags() == item_id_flags::LP_REDIRECT }
     pub(crate) fn is_dead(&self) -> bool { self.lp_flags() == item_id_flags::LP_DEAD }
-}
-
-impl ItemIdData {
-    pub(crate) fn set_unused(&mut self) {
-        self.0 = 0; // LP_UNUSED (0) + off (0) + len (0)
-    }
-    pub(crate) fn set_dead(&mut self) {
-        self.set_lp_flags(item_id_flags::LP_DEAD);
-    }
-    pub(crate) fn set_redirect(&mut self, next_slot: OffsetNumber) {
-        self.set_lp_flags(item_id_flags::LP_REDIRECT);
-        self.set_lp_off(next_slot);
-        self.set_lp_len(0);
-    }
+    pub(crate) fn set_unused(&mut self) { self.set_lp_flags(item_id_flags::LP_UNUSED) }
+    pub(crate) fn is_normal(&self) -> bool { self.lp_flags() == item_id_flags::LP_NORMAL }
 }
 
 /// Pages store items of some kind, which must satisfy the PageItem trait.

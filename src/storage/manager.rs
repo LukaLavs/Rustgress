@@ -18,9 +18,9 @@ impl StorageManager {
             tables: RwLock::new(HashMap::new()),
         }
     }
-
     /// Get Table access, if already open return existing instance.
     pub fn get_table(&self, oid: u32) -> Result<Arc<RwLock<Table>>, DiskError> {
+        // Some error handling (recovering system catalogs)
         {   // already exist, return it 
             let tables_read = self.tables.read().map_err(|_| LockError)?;
             if let Some(table) = tables_read.get(&oid) {
@@ -35,7 +35,6 @@ impl StorageManager {
                 .clone()
         )
     }
-
     pub fn get_bpm(&self) -> Arc<BufferPoolManager> {
         Arc::clone(&self.bpm)
     }
