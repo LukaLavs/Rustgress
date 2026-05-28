@@ -159,7 +159,7 @@ impl<'a> SQLParser<'a> {
         self.chars.clone().peek() == Some(&c)
     }
 
-    //creates a new parser? maybe
+
     pub fn new(sql: &'a str) -> Self {
         SQLParser {
             chars: sql.chars().peekable(),
@@ -189,10 +189,9 @@ impl<'a> SQLParser<'a> {
         _ => Err(format!("Unknown statement: {}", keyword)),
     }
 }
-    // POPRAVLJENO
-    //HERE!!!!!!
+
     pub fn parse_insert(&mut self) -> Result<SQLStatement, String> {
-        self.skip_whitespace();  // <- DODAJ TO na začetek!
+        self.skip_whitespace();  
 
         self.expect_keyword("into")?;
 
@@ -200,7 +199,6 @@ impl<'a> SQLParser<'a> {
 
         self.skip_whitespace();
 
-        // Preveri ali imamo stolpce (optional)
         let columns = if self.peek_char('(') {
             self.expect_char('(')?;
 
@@ -215,7 +213,7 @@ impl<'a> SQLParser<'a> {
                 if self.peek_char(',') {
                     self.chars.next();
                     self.position += 1;
-                    self.skip_whitespace();  // <- DODAJ tudi tukaj
+                    self.skip_whitespace();  
                 } else {
                     break;
                 }
@@ -227,9 +225,9 @@ impl<'a> SQLParser<'a> {
             None
         };
 
-        self.skip_whitespace();  // <- DODAJ pred VALUES
+        self.skip_whitespace(); 
         self.expect_keyword("values")?;
-        self.skip_whitespace();  // <- DODAJ pred '('
+        self.skip_whitespace();  
         self.expect_char('(')?;
 
         let mut values = Vec::new();
@@ -244,7 +242,7 @@ impl<'a> SQLParser<'a> {
             if self.peek_char(',') {
                 self.chars.next();
                 self.position += 1;
-                self.skip_whitespace();  // <- DODAJ po vejici
+                self.skip_whitespace();  
             } else {
                 break;
             }
@@ -253,12 +251,11 @@ impl<'a> SQLParser<'a> {
         self.expect_char(')')?;
         values.push(row_values);
 
-        // Opcijsko: podpora za več vrstic VALUES (..., ...)
         self.skip_whitespace();
         while self.peek_char(',') {
             self.chars.next();
             self.position += 1;
-            self.skip_whitespace();  // <- DODAJ po vejici
+            self.skip_whitespace();  
 
             self.expect_char('(')?;
 
@@ -273,7 +270,7 @@ impl<'a> SQLParser<'a> {
                 if self.peek_char(',') {
                     self.chars.next();
                     self.position += 1;
-                    self.skip_whitespace();  // <- DODAJ po vejici
+                    self.skip_whitespace(); 
                 } else {
                     break;
                 }
@@ -298,7 +295,7 @@ impl<'a> SQLParser<'a> {
 
         let if_not_exists = self.peek_keyword("if")?;
         if if_not_exists {
-            self.parse_keyword()?; // IF
+            self.parse_keyword()?;
             self.expect_keyword("not")?;
             self.expect_keyword("exists")?;
         }
@@ -580,11 +577,11 @@ pub fn parse_sql_value(&mut self) -> Result<SQLValue, String> {
         Ok(result)
     }
 pub fn parse_keyword(&mut self) -> Result<String, String> {
-    self.skip_whitespace();  // Preskoči presledke na začetku
+    self.skip_whitespace(); 
 
     let mut keyword = String::new();
 
-    // Beri samo alfanumerične znake, brez presledkov
+    // Beri  brez presledkov
     while let Some(&c) = self.chars.peek() {
         if c.is_alphanumeric() || c == '_' {
             keyword.push(c);
@@ -637,21 +634,18 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
     }
 
     pub fn parse_update(&mut self) -> Result<SQLStatement, String> {
-        // Parsa: UPDATE table_name SET col1 = val1, col2 = val2 WHERE ...
+        // Parsa: UPDATE table_name SET col1 = val1, col2 = val2 WHERE 
         let table_name = self.parse_identifier()?;
 
         self.expect_keyword("set")?;
 
         let mut assignments = Vec::new();
 
-        // Parsanje SET klavzule: col = expr, col2 = expr2
+        // Parsanje SET  : col = expr, col2 = expr2
         loop {
             let col_name = self.parse_identifier()?;
             self.expect_char('=')?;
             
-            // Tukaj zaenkrat parsamo le literalne vrednosti kot izraz
-            // Če boš kasneje želel podporo za aritmetiko (starost = starost + 1),
-            // boš moral tukaj poklicati bolj splošen parse_expression()
             let val = self.parse_sql_value()?;
             assignments.push((col_name, Expression::Literal(val)));
 
@@ -664,7 +658,7 @@ pub fn parse_keyword(&mut self) -> Result<String, String> {
             }
         }
 
-        // Parsanje WHERE klavzule
+        // Parsanje WHERE 
         let where_clause = if self.peek_keyword("where")? {
             self.parse_keyword()?; // Požri "WHERE"
             Some(self.parse_where_clause()?)
