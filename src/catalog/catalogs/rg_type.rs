@@ -1,5 +1,8 @@
 use crate::access::tuple::desc::{TupleDescriptor, Column};
-use super::super::types::{DataType, Value};
+use crate::utils::adt::datatype::{Value, DataType};
+use crate::utils::adt::integer::IntegerType;
+use crate::utils::adt::text::TextType;
+use crate::utils::adt::boolean::BooleanType;
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
 
@@ -14,7 +17,7 @@ impl RGSomething for RGType {
     fn get_descriptor() -> TupleDescriptor {
         TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
-            Column { name: "typname".to_string(), data_type: DataType::Varchar(64) },
+            Column { name: "typname".to_string(), data_type: DataType::Text },
             Column { name: "typlen".to_string(), data_type: DataType::Integer }, // i16 shranimo kot Integer
             Column { name: "typbyval".to_string(), data_type: DataType::Boolean },
         ])
@@ -23,7 +26,7 @@ impl RGSomething for RGType {
     fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid),
-            Value::Varchar(self.typname),
+            Value::Text(self.typname),
             Value::Integer(self.typlen as i32),
             Value::Boolean(self.typbyval),
         ])
@@ -34,10 +37,10 @@ impl RGSomething for RGType {
         let values = schema.unpack_from_tuple(tuple);
         
         Self {
-            oid:      values[0].as_i32().unwrap(),
-            typname:  values[1].as_str().to_string(),
-            typlen:   values[2].as_i32().unwrap(),
-            typbyval: values[3].as_bool().unwrap(),
+            oid:      values[0].as_native::<IntegerType>().unwrap(),
+            typname:  values[1].as_native::<TextType>().unwrap(),
+            typlen:   values[2].as_native::<IntegerType>().unwrap(),
+            typbyval: values[3].as_native::<BooleanType>().unwrap(),
         }
     }
 }

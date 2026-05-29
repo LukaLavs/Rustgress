@@ -96,7 +96,6 @@ impl HeapAccess {
         rid: RowId,
     ) -> Result<bool, AccessError> {
         let xid = get_current_xid();
-        assert!(xid != 0, "No active transaction found in context for delete operation");
         let bpm = storage.get_bpm();
         let table = storage.get_table(table_oid)?;
         let tag = BufferTag { 

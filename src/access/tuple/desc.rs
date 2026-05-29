@@ -1,6 +1,6 @@
 use crate::access::tuple::header::{TupleInfoMask, HeapTupleHeaderData};
 use crate::access::tuple::tuple::{HeapTupleView, HeapTuple};
-use crate::catalog::types::{DataType, Value};
+use crate::utils::adt::datatype::{Value, DataType};
 use crate::access::transaction::context::get_current_xid;
 
 #[derive(Debug, Clone)] 

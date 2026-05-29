@@ -1,5 +1,8 @@
 use crate::access::tuple::desc::{TupleDescriptor, Column};
-use super::super::types::{DataType, Value};
+use crate::utils::adt::datatype::{Value, DataType};
+use crate::utils::adt::integer::IntegerType;
+use crate::utils::adt::text::TextType;
+use crate::utils::adt::float::FloatType;
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
 
@@ -18,7 +21,7 @@ impl RGSomething for RGClass {
     fn get_descriptor() -> TupleDescriptor {
         TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
-            Column { name: "relname".to_string(), data_type: DataType::Varchar(64) },
+            Column { name: "relname".to_string(), data_type: DataType::Text },
             Column { name: "relnamespace".to_string(), data_type: DataType::Integer },
             Column { name: "relpages".to_string(), data_type: DataType::Integer },
             Column { name: "reltuples".to_string(), data_type: DataType::Float },
@@ -29,7 +32,7 @@ impl RGSomething for RGClass {
     fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid),
-            Value::Varchar(self.relname),
+            Value::Text(self.relname),
             Value::Integer(self.relnamespace),
             Value::Integer(self.relpages),
             Value::Float(self.reltuples),
@@ -42,13 +45,13 @@ impl RGSomething for RGClass {
         let values = schema.unpack_from_tuple(tuple);
         
         Self {
-            oid:      values[0].as_i32().unwrap(),
-            relname:  values[1].as_str().to_string(),
-            relnamespace: values[2].as_i32().unwrap(),
-            relpages: values[3].as_i32().unwrap(),
-            reltuples: values[4].as_f32().unwrap(),
-            relspecial: values[5].as_i32().unwrap(),
-            relnatts: values[6].as_i32().unwrap(),
+            oid:      values[0].as_native::<IntegerType>().unwrap(),
+            relname:  values[1].as_native::<TextType>().unwrap(),
+            relnamespace: values[2].as_native::<IntegerType>().unwrap(),
+            relpages: values[3].as_native::<IntegerType>().unwrap(),
+            reltuples: values[4].as_native::<FloatType>().unwrap(),
+            relspecial: values[5].as_native::<IntegerType>().unwrap(),
+            relnatts: values[6].as_native::<IntegerType>().unwrap(),
         }
     }
 }

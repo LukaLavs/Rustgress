@@ -1,12 +1,12 @@
 use crate::utils::adt::traits::TypeDescriptor;
-use crate::common::constants::{RG_TYPE_VARCHAR, RG_TYPE_LEN_VARCHAR};
+use crate::common::constants::{RG_TYPE_TEXT, RG_TYPE_LEN_VARCHAR};
 
-pub struct VarcharType;
+pub struct TextType;
 
-impl TypeDescriptor for VarcharType {
+impl TypeDescriptor for TextType {
     type Native = String;
-    const OID: u32 = RG_TYPE_VARCHAR;
-    const NAME: &'static str = "VARCHAR";
+    const OID: u32 = RG_TYPE_TEXT;
+    const NAME: &'static str = "TEXT";
     const IS_FIXED: bool = false;
     const BYTE_LEN: i32 = RG_TYPE_LEN_VARCHAR; // Običajno -1 za variabilne tipe
 

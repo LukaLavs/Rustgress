@@ -1,5 +1,7 @@
 use crate::access::tuple::desc::{TupleDescriptor, Column};
-use super::super::types::{DataType, Value};
+use crate::utils::adt::datatype::{Value, DataType};
+use crate::utils::adt::integer::IntegerType;
+use crate::utils::adt::text::TextType;
 use crate::access::tuple::tuple::HeapTuple;
 use super::traits::RGSomething;
 
@@ -14,7 +16,7 @@ impl RGSomething for RGNamespace {
     fn get_descriptor() -> TupleDescriptor {
         TupleDescriptor::new(vec![
             Column { name: "oid".to_string(), data_type: DataType::Integer },
-            Column { name: "nspname".to_string(), data_type: DataType::Varchar(64) },
+            Column { name: "nspname".to_string(), data_type: DataType::Text },
             Column { name: "nspowner".to_string(), data_type: DataType::Integer },
             Column { name: "nspacl".to_string(), data_type: DataType::Integer },
         ])
@@ -22,7 +24,7 @@ impl RGSomething for RGNamespace {
     fn make_tuple(self, schema: &TupleDescriptor) -> HeapTuple {
         schema.pack(vec![
             Value::Integer(self.oid as i32),
-            Value::Varchar(self.nspname),
+            Value::Text(self.nspname),
             Value::Integer(self.nspowner as i32),
             Value::Integer(self.nspacl as i32),
         ])
@@ -32,10 +34,10 @@ impl RGSomething for RGNamespace {
         let values = schema.unpack_from_tuple(tuple);
         
         Self {
-            oid:      values[0].as_i32().unwrap(),
-            nspname:  values[1].as_str().to_string(),
-            nspowner: values[2].as_i32().unwrap(),
-            nspacl:   values[3].as_i32().unwrap(),
+            oid:      values[0].as_native::<IntegerType>().unwrap(),
+            nspname:  values[1].as_native::<TextType>().unwrap(),
+            nspowner: values[2].as_native::<IntegerType>().unwrap(),
+            nspacl:   values[3].as_native::<IntegerType>().unwrap(),
         }
     }
 }

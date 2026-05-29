@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
-use crate::catalog::types::{DataType};
+use crate::utils::adt::datatype::{DataType};
+use crate::utils::adt::integer::IntegerType;
 use crate::storage::manager::StorageManager;
 use crate::access::transaction::manager::TransactionManager;
 use crate::access::heap::access::HeapAccess;
@@ -53,7 +54,7 @@ impl CatalogManager {
             // in RGClass oid is first column (zero indexed)
             if let Some(oid_val) = values.get(0) {
                 if cfg!(debug_assertions) {println!("CatalogManager: Inspecting OID from rg_class: {:?}", oid_val)};
-                if let Some(oid) = oid_val.as_i32() {
+                if let Some(oid) = oid_val.as_native::<IntegerType>(){
                     if cfg!(debug_assertions) {println!("CatalogManager: Found existing OID in rg_class: {}", oid)};
                     if oid as u32 >= max_oid {
                         max_oid = (oid as u32) + 1;
@@ -130,7 +131,7 @@ impl CatalogManager {
         // DELETE FROM rg_class
         let class_table = self.storage
             .get_system_table_with_recovery(RG_CLASS_OID);
-        let mut scan = HeapScan::new(bpm.clone(), class_table.clone(), self.tm.clone())?;
+        let mut scan = HeapScan::new(bpm.clone(), class_table, self.tm.clone())?;
         if let Some(tuple) = scan
             .find(|t| RGClass::from_tuple(t).oid as u32 == table_oid) 
         {
@@ -146,9 +147,9 @@ impl CatalogManager {
                 Ok::<(), AccessError>(()) // Povej closure-u, kaj vrača ob uspehu
             })?;
         // REMOVE file from disk
-        let _ = std::fs::remove_file(format!("data/{}", table_oid));
         bpm.flush_all()?;
         bpm.evict_table_pages(table_oid)?;
+        let _ = std::fs::remove_file(format!("data/{}", table_oid));
 
         Ok(true)
     }

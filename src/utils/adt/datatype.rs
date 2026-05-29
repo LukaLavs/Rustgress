@@ -1,4 +1,6 @@
 use crate::utils::adt::traits::TypeDescriptor;
+use serde_json::{Value as JsonValue, json};
+
 
 macro_rules! register_types {
     ($( $variant:ident => $struct:ty ),*) => {
@@ -18,6 +20,16 @@ macro_rules! register_types {
                 match oid {
                     $( <$struct>::OID => DataType::$variant, )*
                     _ => panic!("Unknown OID: {}", oid),
+                }
+            }
+            pub fn get_oid(&self) -> u32 {
+                match self {
+                    $( DataType::$variant => <$struct>::OID, )*
+                }
+            }
+            pub fn get_byte_len(&self) -> i32 {
+                match self {
+                    $( DataType::$variant => <$struct>::BYTE_LEN, )*
                 }
             }
             pub fn unpack(&self, data: &[u8], cursor: &mut usize) -> Value {
@@ -69,6 +81,12 @@ macro_rules! register_types {
                     Value::Null => "NULL".to_string(),
                 }
             }
+            pub fn as_json(&self) -> JsonValue {
+                match self {
+                    $( Value::$variant(v) => json!(v), )*
+                    Value::Null => JsonValue::Null,
+                }
+            }
         }
     };
 
@@ -79,7 +97,7 @@ macro_rules! register_types {
 register_types! {
     Integer   => crate::utils::adt::integer::IntegerType,
     Boolean   => crate::utils::adt::boolean::BooleanType,
-    Varchar   => crate::utils::adt::varchar::VarcharType,
+    Text      => crate::utils::adt::text::TextType,
     Timestamp => crate::utils::adt::timestamp::TimestampType,
     Float     => crate::utils::adt::float::FloatType,
     Double    => crate::utils::adt::double::DoubleType,

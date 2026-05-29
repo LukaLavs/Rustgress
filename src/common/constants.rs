@@ -17,6 +17,7 @@ pub const RG_TYPE_TIMESTAMP: u32 = 53;
 pub const RG_TYPE_FLOAT: u32 = 54;
 pub const RG_TYPE_DOUBLE: u32 = 55;
 pub const RG_TYPE_NUMERIC: u32 = 56;
+pub const RG_TYPE_TEXT: u32 = 57;
 
 
 pub const RG_TYPE_LEN_INT: i32 = 4;

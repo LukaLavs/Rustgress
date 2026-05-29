@@ -6,10 +6,9 @@ use crate::access::heap::scan::HeapScan;
 use crate::access::tuple::desc::TupleDescriptor;
 use crate::access::tuple::tuple::{HeapTuple};
 use crate::catalog::manager::CatalogManager;
-use crate::catalog::types::Value;
 use crate::query::parser::parser::*;
 use crate::access::heap::access::HeapAccess;
-use crate::catalog::types::DataType;
+use crate::utils::adt::datatype::{Value, DataType};
 use crate::access::tuple;
 use std::cmp::Ordering;
 use crate::utils::debug::errors::{RustgressError as RGE};
@@ -98,7 +97,7 @@ impl FilterExecutor {
                 // TODO: write this in a separate function
                 match sql_val {
                     SQLValue::Integer(num) => Value::Integer(*num as i32), // Pazi na i64 -> i32 pretvorbo po potrebi
-                    SQLValue::String(s) => Value::Varchar(s.clone()),
+                    SQLValue::String(s) => Value::Text(s.clone()),
                     SQLValue::Boolean(b) => Value::Boolean(*b),
                     SQLValue::Float(f) => Value::Float(*f as f32),
                     SQLValue::Null => Value::Null,
@@ -190,7 +189,7 @@ impl FilterExecutor {
             },
             
             // Tekstovna primerjava
-            (Value::Varchar(l), Value::Varchar(r)) => match op {
+            (Value::Text(l), Value::Text(r)) => match op {
                 ComparisonOperator::Eq => l == r,
                 ComparisonOperator::Ne => l != r,
                 ComparisonOperator::Lt => l < r,
@@ -381,7 +380,7 @@ impl SortExecutor {
     fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         match (a, b) { // TODO: Value should implement this
             (Value::Integer(va), Value::Integer(vb)) => va.cmp(vb),
-            (Value::Varchar(va), Value::Varchar(vb)) => va.cmp(vb),
+            (Value::Text(va), Value::Text(vb)) => va.cmp(vb),
             (Value::Boolean(va), Value::Boolean(vb)) => va.cmp(vb),
             (Value::Timestamp(va), Value::Timestamp(vb)) => va.cmp(vb),
             (Value::Float(va), Value::Float(vb)) => {
@@ -559,7 +558,7 @@ impl ExecutionEngine {
                 for sql_val in row {
                     let val = match sql_val { // TODO: this repeats often, write helper function
                         SQLValue::Integer(num) => Value::Integer(num as i32),
-                        SQLValue::String(s) => Value::Varchar(s.clone()),
+                        SQLValue::String(s) => Value::Text(s.clone()),
                         SQLValue::Boolean(b) => Value::Boolean(b),
                         SQLValue::Float(f) => Value::Float(f as f32),
                         SQLValue::Null => Value::Null,
@@ -595,10 +594,10 @@ impl ExecutionEngine {
                     let out_desc = Arc::new(TupleDescriptor::new(vec![
                         tuple::desc::Column {
                             name: "CREATE_TABLE".to_string(),
-                            data_type: DataType::Varchar(264),
+                            data_type: DataType::Text,
                         }
                     ]));
-                    return Ok((vec![vec![Value::Varchar(format!("Table {} already exists, skipping.", name))]], out_desc));
+                    return Ok((vec![vec![Value::Text(format!("Table {} already exists, skipping.", name))]], out_desc));
                 }
             }
             // This could also be a helper function
@@ -606,8 +605,7 @@ impl ExecutionEngine {
             for col_def in columns {
                 let system_type = match col_def.data_type {
                     DataTypeDef::Int | DataTypeDef::Integer => DataType::Integer,
-                    DataTypeDef::Varchar(size) => DataType::Varchar(size.unwrap_or(255) as u16),
-                    DataTypeDef::Text => DataType::Varchar(1000), // TODO: Text type not really implemented, critical.
+                    DataTypeDef::Text => DataType::Text,
                     DataTypeDef::Boolean => DataType::Boolean,
                     DataTypeDef::Float | DataTypeDef::Double => DataType::Float,
                     // Dodaj poljubne preostale tipe, ki jih tvoj DataType podpira
@@ -624,11 +622,11 @@ impl ExecutionEngine {
             let out_desc = Arc::new(TupleDescriptor::new(vec![
                 tuple::desc::Column {
                     name: "CREATE_TABLE".to_string(),
-                    data_type: DataType::Varchar(264), 
+                    data_type: DataType::Text, 
                 }
             ]));
             Ok((
-                vec![vec![Value::Varchar(format!("Table {} created successfully with OID {}.", name, new_oid))]], 
+                vec![vec![Value::Text(format!("Table {} created successfully with OID {}.", name, new_oid))]], 
                 out_desc
             ))
         }
@@ -650,10 +648,10 @@ impl ExecutionEngine {
             let out_desc = Arc::new(TupleDescriptor::new(vec![
                 tuple::desc::Column {
                     name: "DROP_TABLE".to_string(),
-                    data_type: DataType::Varchar(264),
+                    data_type: DataType::Text,
                 }
             ]));
-            Ok((vec![vec![Value::Varchar(message)]], out_desc))
+            Ok((vec![vec![Value::Text(message)]], out_desc))
         }
 
         // =========================================================================
@@ -749,7 +747,7 @@ impl ExecutionEngine {
                         if let Expression::Literal(sql_val) = expr {
                             current_values[col_idx] = match sql_val {
                                 SQLValue::Integer(i) => Value::Integer(*i as i32),
-                                SQLValue::String(s) => Value::Varchar(s.clone()),
+                                SQLValue::String(s) => Value::Text(s.clone()),
                                 SQLValue::Boolean(b) => Value::Boolean(*b),
                                 SQLValue::Float(f) => Value::Float(*f as f32),
                                 SQLValue::Null => Value::Null,
@@ -781,7 +779,7 @@ impl ExecutionEngine {
         // =========================================================================
         _ => {
             let out_desc = Arc::new(TupleDescriptor::new(Vec::new()));
-            Ok((vec![vec![Value::Varchar("Unsupported statement".to_string())]], out_desc))
+            Ok((vec![vec![Value::Text("Unsupported statement".to_string())]], out_desc))
         }
     }
 }
@@ -795,5 +793,18 @@ impl ExecutionEngine {
             self.execute_statement(stmt)?;
         }
         Ok(())
+    }
+}
+
+impl From<SQLValue> for Value {
+    fn from(v: SQLValue) -> Self {
+        match v {
+            SQLValue::Integer(i) => Value::Integer(i as i32),
+            SQLValue::String(s) => Value::Text(s),
+            SQLValue::Boolean(b) => Value::Boolean(b),
+            SQLValue::Float(f) => Value::Float(f as f32),
+            SQLValue::Null => Value::Null,
+
+        }
     }
 }
